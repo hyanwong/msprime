@@ -535,13 +535,13 @@ class TreeDrawer(object):
     def __init__(
             self, tree, width=200, height=200, show_times=False,
 <<<<<<< HEAD
-            show_mutation_labels=False, show_internal_node_labels=True,
-            show_leaf_node_labels=True, branch_colours=None, node_colours=None):
-=======
             show_mutation_locations=True, show_mutation_labels=False,
             show_internal_node_labels=True, show_leaf_node_labels=True,
             node_label_text=None, x_padding=0, y_padding=0):
->>>>>>> master
+=======
+            show_mutation_labels=False, show_internal_node_labels=True,
+            show_leaf_node_labels=True, branch_colours=None, node_colours=None):
+>>>>>>> 98509b699a4a19581016b124fac2bd811028a642
         self._width = width
         self._height = height
         self._show_times = show_times
@@ -556,15 +556,15 @@ class TreeDrawer(object):
         self._x_coords = {}
         self._y_coords = {}
 <<<<<<< HEAD
+        self._node_label_text = {}
+=======
         self._branch_colours = {}
         if branch_colours is not None:
             self._branch_colours = branch_colours
         self._node_colours = {}
         if node_colours is not None:
             self._node_colours = node_colours
-=======
-        self._node_label_text = {}
->>>>>>> master
+>>>>>>> 98509b699a4a19581016b124fac2bd811028a642
         for u in tree.nodes():
             scaled_t = tree.get_time(u) * self._y_scale
             self._y_coords[u] = self._discretise(height - scaled_t - y_padding)
@@ -982,15 +982,15 @@ class SparseTree(object):
 
     def draw(
 <<<<<<< HEAD
-            self, path=None, width=200, height=200, show_times=False,
-            show_mutation_labels=False, show_internal_node_labels=True,
-            show_leaf_node_labels=True, branch_colours=None, node_colours=None):
-=======
             self, path=None, width=200, height=200, times=False,
             mutation_locations=True, mutation_labels=False,
             internal_node_labels=True, leaf_node_labels=True, show_times=None,
             node_label_text=None, format=None):
->>>>>>> master
+=======
+            self, path=None, width=200, height=200, show_times=False,
+            show_mutation_labels=False, show_internal_node_labels=True,
+            show_leaf_node_labels=True, branch_colours=None, node_colours=None):
+>>>>>>> 98509b699a4a19581016b124fac2bd811028a642
         """
         Returns a representation of this tree in SVG format.
 
@@ -999,32 +999,6 @@ class SparseTree(object):
         :param int width: The width of the image in pixels.
         :param int height: The height of the image in pixels.
 <<<<<<< HEAD
-        :param bool show_times: If True, show time labels at each internal
-            node.
-        :param bool show_mutation_labels: If True, show labels for mutations.
-        :param bool show_internal_node_labels: If True, show labels for internal nodes.
-        :param bool show_leaf_node_labels: If True, show labels for leaf nodes.
-        :param dict branch_colours: A dict giving colours for edges in the tree.
-            Keys correspond to the node number which terminates the edge to be coloured. 
-            Values can be any SVG-approved colour string, such as 'red', 
-            'rgba(10, 99, 50,50)', or '#6495ED'. All nodes whose keys are absent or 
-            whose value is None, are plotted in a default colour.
-        :param dict node_colours: A dict giving colours for nodes in the tree.
-            Keys correspond to node numbers in the tree, values as for branch_colours
-        :return: A representation of this tree in SVG format.
-        :rtype: str
-        """
-        if not _svgwrite_imported:
-            raise ImportError(
-                "svgwrite is not installed. try `pip install svgwrite`")
-        td = TreeDrawer(
-                self, width=width, height=height, show_times=show_times,
-                show_mutation_labels=show_mutation_labels,
-                show_internal_node_labels=show_internal_node_labels,
-                show_leaf_node_labels=show_leaf_node_labels,
-                branch_colours=branch_colours, node_colours=node_colours, )
-        svg = td.draw()
-=======
         :param bool times: If True, show time labels at each internal node.
         :param bool mutation_locations: If True, show mutations as points over nodes.
         :param bool mutation_labels: If True, show labels for mutations.
@@ -1070,7 +1044,33 @@ class SparseTree(object):
                     node_label_text=node_label_text,
                     show_leaf_node_labels=leaf_node_labels)
         output = td.draw()
->>>>>>> master
+=======
+        :param bool show_times: If True, show time labels at each internal
+            node.
+        :param bool show_mutation_labels: If True, show labels for mutations.
+        :param bool show_internal_node_labels: If True, show labels for internal nodes.
+        :param bool show_leaf_node_labels: If True, show labels for leaf nodes.
+        :param dict branch_colours: A dict giving colours for edges in the tree.
+            Keys correspond to the node number which terminates the edge to be coloured. 
+            Values can be any SVG-approved colour string, such as 'red', 
+            'rgba(10, 99, 50,50)', or '#6495ED'. All nodes whose keys are absent or 
+            whose value is None, are plotted in a default colour.
+        :param dict node_colours: A dict giving colours for nodes in the tree.
+            Keys correspond to node numbers in the tree, values as for branch_colours
+        :return: A representation of this tree in SVG format.
+        :rtype: str
+        """
+        if not _svgwrite_imported:
+            raise ImportError(
+                "svgwrite is not installed. try `pip install svgwrite`")
+        td = TreeDrawer(
+                self, width=width, height=height, show_times=show_times,
+                show_mutation_labels=show_mutation_labels,
+                show_internal_node_labels=show_internal_node_labels,
+                show_leaf_node_labels=show_leaf_node_labels,
+                branch_colours=branch_colours, node_colours=node_colours, )
+        svg = td.draw()
+>>>>>>> 98509b699a4a19581016b124fac2bd811028a642
         if path is not None:
             with open(path, "w") as f:
                 f.write(output)
