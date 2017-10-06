@@ -147,7 +147,26 @@ class Edgeset(SimpleContainer):
 
 
 class NodeTable(_msprime.NodeTable):
-    # TODO document
+    """
+    Class for tables describing all nodes in the tree sequence, of the form
+        id	flags	population	time
+        0	1	0		0.0
+        1	1	1		0.0
+        2	0	0		0.0
+        3	1	0		0.5
+        4	0	2		2.1
+    Node IDs are *not* recorded; rather the `id` column shows the row index, so
+    that the `k`-th row describes the node whose ID is `k`.  `flags` currently
+    records whether the node is a sample (=1) or not (=0).  `population` is an
+    integer population ID, and `time` is the time since that individual was
+    born, as a float.
+
+    Requirements:
+        1. All birth times must be greater than or equal to zero.
+
+    It is not required that the `time` column be ordered or that all samples
+    must be at the top.
+    """
     def __str__(self):
         time = self.time
         flags = self.flags
@@ -157,8 +176,60 @@ class NodeTable(_msprime.NodeTable):
             ret += "{}\t{}\t{}\t\t{:.14f}\n".format(j, flags[j], population[j], time[j])
         return ret[:-1]
 
+    def __eq__(self, other):
+        ret = False
+        if type(other) is type(self):
+            ret = (
+                np.array_equal(self.flags, other.flags) and
+                np.array_equal(self.population, other.population) and
+                np.array_equal(self.time, other.time) and
+                np.array_equal(self.name, other.name) and
+                np.array_equal(self.name_length, other.name_length))
+        return ret
+
+    def __len__(self):
+        return self.num_rows
+
+    def copy(self):
+        """
+        Returns a deep copy of this table.
+        """
+        copy = NodeTable()
+        copy.set_columns(
+            flags=self.flags, time=self.time, population=self.population,
+            name=self.name, name_length=self.name_length)
+        return copy
+
 
 class EdgesetTable(_msprime.EdgesetTable):
+    """
+    Class for tables describing all edgesets in a tree sequence, of the form
+        left	right	parent	children
+        0.0     0.4     3       0,2
+        0.4     1.0     3       0,1,2
+        0.0     0.4     4       1,3
+    These describe the half-open genomic interval affected: `[left, right)`,
+    the `parent` and the `children` on that interval.
+
+    Requirements: to describe a valid tree sequence, a `EdgesetTable` (and
+    corresponding `NodeTable`, to provide birth times) must satisfy:
+        1. each list of children must be in sorted order,
+        2. any two edgesets that share a child must be nonoverlapping, and
+        3. the birth times of the `parent` in an edgeset must be strictly
+            greater than the birth times of the `children` in that edgeset.
+    Furthermore, for algorithmic requirements
+        4. the smallest `left` coordinate must be 0.0,
+        5. the the table must be sorted by birth time of the `parent`, and
+        6. any two edgesets corresponding to the same `parent` must be nonoverlapping.
+    It is an additional requirement that the complete ancestry of each sample
+    must be specified, but this is harder to verify.
+
+    It is not required that all records corresponding to the same parent be
+    adjacent in the table.
+
+    `simplify_tables()` may be used to convert noncontradictory tables
+    into tables satisfying the full set of requirements.
+    """
     def __str__(self):
         left = self.left
         right = self.right
@@ -173,6 +244,30 @@ class EdgesetTable(_msprime.EdgesetTable):
             ret += "{}\t{:.8f}\t{:.8f}\t{}\t{}\n".format(
                 j, left[j], right[j], parent[j], ",".join(map(str, row_children)))
         return ret[:-1]
+
+    def __eq__(self, other):
+        ret = False
+        if type(other) is type(self):
+            ret = (
+                np.array_equal(self.left, other.left) and
+                np.array_equal(self.right, other.right) and
+                np.array_equal(self.parent, other.parent) and
+                np.array_equal(self.children, other.children) and
+                np.array_equal(self.children_length, other.children_length))
+        return ret
+
+    def __len__(self):
+        return self.num_rows
+
+    def copy(self):
+        """
+        Returns a deep copy of this table.
+        """
+        copy = EdgesetTable()
+        copy.set_columns(
+            left=self.left, right=self.right, parent=self.parent,
+            children=self.children, children_length=self.children_length)
+        return copy
 
 
 class MigrationTable(_msprime.MigrationTable):
@@ -189,8 +284,44 @@ class MigrationTable(_msprime.MigrationTable):
                 j, left[j], right[j], node[j], source[j], dest[j], time[j])
         return ret[:-1]
 
+    def __eq__(self, other):
+        ret = False
+        if type(other) is type(self):
+            ret = (
+                np.array_equal(self.left, other.left) and
+                np.array_equal(self.right, other.right) and
+                np.array_equal(self.node, other.node) and
+                np.array_equal(self.source, other.source) and
+                np.array_equal(self.dest, other.dest) and
+                np.array_equal(self.time, other.time))
+        return ret
+
+    def __len__(self):
+        return self.num_rows
+
+    def copy(self):
+        """
+        Returns a deep copy of this table.
+        """
+        copy = MigrationTable()
+        copy.set_columns(
+            left=self.left, right=self.right, node=self.node, source=self.source,
+            dest=self.dest, time=self.time)
+        return copy
+
 
 class SiteTable(_msprime.SiteTable):
+    """
+    Class for tables describing all sites at which mutations have occurred in a
+    tree sequence, of the form
+        id	position	ancestral_state
+        0	0.1     	0
+        1	0.5     	0
+    Here ``id`` is not stored directly, but is determined by the row index in
+    the table.  ``position`` is the position along the genome, and
+    ``ancestral_state`` gives the allele at the root of the tree at that
+    position.
+    """
     def __str__(self):
         position = self.position
         ancestral_state = unpack_strings(
@@ -200,8 +331,46 @@ class SiteTable(_msprime.SiteTable):
             ret += "{}\t{:.8f}\t{}\n".format(j, position[j], ancestral_state[j])
         return ret[:-1]
 
+    def __eq__(self, other):
+        ret = False
+        if type(other) is type(self):
+            ret = (
+                np.array_equal(self.position, other.position) and
+                np.array_equal(self.ancestral_state, other.ancestral_state) and
+                np.array_equal(
+                    self.ancestral_state_length, other.ancestral_state_length))
+        return ret
+
+    def __len__(self):
+        return self.num_rows
+
+    def copy(self):
+        """
+        Returns a deep copy of this table.
+        """
+        copy = SiteTable()
+        copy.set_columns(
+            position=self.position, ancestral_state=self.ancestral_state,
+            ancestral_state_length=self.ancestral_state_length)
+        return copy
+
 
 class MutationTable(_msprime.MutationTable):
+    """
+    Class for tables describing all mutations that have occurred in a tree
+    sequence, of the form
+        site	node	derived_state
+        0	4	1
+        1	3	1
+        1	2	0
+    Here ``site`` is the index in the SiteTable of the site at which the
+    mutation occurred, ``node`` is the index in the NodeTable of the node who
+    is the first node inheriting the mutation, and ``derived_state`` is the
+    allele resulting from this mutation.
+
+    It is required that mutations occurring at the same node are sorted in
+    reverse time order.
+    """
     def __str__(self):
         site = self.site
         node = self.node
@@ -211,6 +380,86 @@ class MutationTable(_msprime.MutationTable):
         for j in range(self.num_rows):
             ret += "{}\t{}\t{}\t{}\n".format(j, site[j], node[j], derived_state[j])
         return ret[:-1]
+
+    def __eq__(self, other):
+        ret = False
+        if type(other) is type(self):
+            ret = (
+                np.array_equal(self.site, other.site) and
+                np.array_equal(self.node, other.node) and
+                np.array_equal(self.derived_state, other.derived_state) and
+                np.array_equal(
+                    self.derived_state_length, other.derived_state_length))
+        return ret
+
+    def __len__(self):
+        return self.num_rows
+
+    def copy(self):
+        """
+        Returns a deep copy of this table.
+        """
+        copy = MutationTable()
+        copy.set_columns(
+            site=self.site, node=self.node, derived_state=self.derived_state,
+            derived_state_length=self.derived_state_length)
+        return copy
+
+
+def sort_tables(*args, **kwargs):
+    """
+    Sorts the given tables in place, as follows:
+
+    Edgesets are ordered by
+
+    - time of parent, then
+    - parent node ID, then
+    - left endpoint.
+
+    For each edgeset, the ``children`` are sorted by increasing node ID.
+
+    Sites are ordered by position, and Mutations are ordered by site.
+
+    Note: for general edgeset tables this only defines a partial ordering, but
+    for strict tables (namely, those for which edgesets belonging to a given
+    parent do not overlap) this enforces a complete ordering.
+
+    .. todo:: Update this documentation to describe the keyword arguments and
+       combinations that are allowed.
+
+    :param NodeTable nodes:
+    :param EdgesetTable edgesets:
+    :param MigrationTable migrations:
+    :param SiteTable sites:
+    :param MutationTable mutations:
+    """
+    return _msprime.sort_tables(*args, **kwargs)
+
+
+def simplify_tables(*args, **kwargs):
+    """
+    Simplifies the tables, in place, to retain only the information necessary
+    to reconstruct the tree sequence describing the given ``samples``.  This
+    will change the ID of the nodes, so that the individual ``samples[k]]``
+    will have ID ``k`` in the result.  The resulting NodeTable will have only
+    the first ``len(samples)`` individuals marked as samples.
+
+    Tables operated on by this function must: be sorted (see ``sort_tables``),
+    have children be born strictly after their parents, and the intervals on
+    which any individual is a child must be disjoint; but other than this the
+    tables need not satisfy remaining requirements to specify a valid tree
+    sequence (but the resulting tables will).
+
+    :param list samples: A list of Node IDs of individuals to retain as samples.
+    :param NodeTable nodes: The NodeTable to be simplified.
+    :param EdgesetTable edgesets: The NodeTable to be simplified.
+    :param MigrationTable migrations: The MigrationTable to be simplified.
+    :param SiteTable sites: The SiteTable to be simplified.
+    :param MutationTable mutations: The MutationTable to be simplified.
+    :param bool filter_invariant_sites: Whether to remove sites that have no
+        mutations from the output (default: True).
+    """
+    return _msprime.simplify_tables(*args, **kwargs)
 
 
 def pack_strings(strings):
@@ -271,34 +520,59 @@ class TreeDrawer(object):
     """
     A class to draw sparse trees in SVG format.
     """
+
+    discretise_coordinates = False
+
+    def _discretise(self, x):
+        """
+        Discetises the specified value, if necessary.
+        """
+        ret = x
+        if self.discretise_coordinates:
+            ret = int(round(x))
+        return ret
+
     def __init__(
             self, tree, width=200, height=200, show_times=False,
+<<<<<<< HEAD
             show_mutation_labels=False, show_internal_node_labels=True,
             show_leaf_node_labels=True, branch_colours=None, node_colours=None):
+=======
+            show_mutation_locations=True, show_mutation_labels=False,
+            show_internal_node_labels=True, show_leaf_node_labels=True,
+            node_label_text=None, x_padding=0, y_padding=0):
+>>>>>>> master
         self._width = width
         self._height = height
         self._show_times = show_times
+        self._show_mutation_locations = show_mutation_locations
         self._show_mutation_labels = show_mutation_labels
         self._show_internal_node_labels = show_internal_node_labels
         self._show_leaf_node_labels = show_leaf_node_labels
         self._x_scale = width / (tree.get_sample_size() + 2)
         t = tree.get_time(tree.get_root())
-        # Leave a margin of 20px top and bottom
-        y_padding = 20
         self._y_scale = (height - 2 * y_padding) / t
         self._tree = tree
         self._x_coords = {}
         self._y_coords = {}
+<<<<<<< HEAD
         self._branch_colours = {}
         if branch_colours is not None:
             self._branch_colours = branch_colours
         self._node_colours = {}
         if node_colours is not None:
             self._node_colours = node_colours
+=======
+        self._node_label_text = {}
+>>>>>>> master
         for u in tree.nodes():
             scaled_t = tree.get_time(u) * self._y_scale
-            self._y_coords[u] = height - scaled_t - y_padding
-        self._leaf_x = 1
+            self._y_coords[u] = self._discretise(height - scaled_t - y_padding)
+            self._node_label_text[u] = str(u)
+        if node_label_text is not None:
+            for node, label in node_label_text.items():
+                self._node_label_text[node] = label
+        self._sample_x = 1
         self._assign_x_coordinates(self._tree.get_root())
         self._mutations = []
         node_mutations = collections.defaultdict(list)
@@ -313,8 +587,30 @@ class TreeDrawer(object):
             y2 = self._y_coords[parent]
             chunk = (y2 - y1) / (n + 1)
             for k, mutation in enumerate(mutations):
-                z = x, y1 + (k + 1) * chunk
+                z = x, self._discretise(y1 + (k + 1) * chunk)
                 self._mutations.append((z, mutation))
+
+    def _assign_x_coordinates(self, node):
+        """
+        Assign x coordinates to all nodes underneath this node.
+        """
+        if self._tree.is_internal(node):
+            children = self._tree.get_children(node)
+            for c in children:
+                self._assign_x_coordinates(c)
+            coords = [self._x_coords[c] for c in children]
+            a = min(coords)
+            b = max(coords)
+            self._x_coords[node] = self._discretise(a + (b - a) / 2)
+        else:
+            self._x_coords[node] = self._discretise(self._sample_x * self._x_scale)
+            self._sample_x += 1
+
+
+class SvgTreeDrawer(TreeDrawer):
+    """
+    Draws trees in SVG format using the svgwrite library.
+    """
 
     def draw(self):
         """
@@ -333,7 +629,7 @@ class TreeDrawer(object):
                 dwg.add(dwg.circle(center=x, r=3))
             dx = [0]
             dy = None
-            if self._tree.is_leaf(u):
+            if self._tree.is_sample(u):
                 dy = [20]
             elif v == msprime.NULL_NODE:
                 dy = [-5]
@@ -341,10 +637,10 @@ class TreeDrawer(object):
                 dx = [-10]
                 dy = [-5]
             condition = (
-                (self._tree.is_leaf(u) and self._show_leaf_node_labels) or
+                (self._tree.is_sample(u) and self._show_leaf_node_labels) or
                 (self._tree.is_internal(u) and self._show_internal_node_labels))
             if condition:
-                labels.add(dwg.text(str(u), x, dx=dx, dy=dy))
+                labels.add(dwg.text(self._node_label_text[u], x, dx=dx, dy=dy))
             if self._show_times and self._tree.is_internal(u):
                 dx[0] += 25
                 labels.add(dwg.text(
@@ -360,40 +656,64 @@ class TreeDrawer(object):
                     lines.add(dwg.line((x[0], y[1]), y))
         for x, mutation in self._mutations:
             r = 3
-            dwg.add(dwg.rect(
-                insert=(x[0] - r, x[1] - r), size=(2 * r, 2 * r), fill="red"))
+            if self._show_mutation_locations:
+                dwg.add(dwg.rect(
+                    insert=(x[0] - r, x[1] - r), size=(2 * r, 2 * r), fill="red"))
             if self._show_mutation_labels:
                 dx = [8 * r]
                 dy = [-2 * r]
                 labels.add(dwg.text("{}".format(mutation.site), x, dx=dx, dy=dy))
         return dwg.tostring()
 
-    def _assign_x_coordinates(self, node):
-        """
-        Assign x coordinates to all nodes underneath this node.
-        """
-        if self._tree.is_internal(node):
-            children = self._tree.get_children(node)
-            for c in children:
-                self._assign_x_coordinates(c)
-            coords = [self._x_coords[c] for c in children]
-            a = min(coords)
-            b = max(coords)
-            self._x_coords[node] = (a + (b - a) / 2)
-        else:
-            self._x_coords[node] = self._leaf_x * self._x_scale
-            self._leaf_x += 1
+
+class AsciiTreeDrawer(TreeDrawer):
+    """
+    Draws an ASCII rendering of a tree.
+    """
+    discretise_coordinates = True
+
+    def draw(self):
+        w = self._width
+        h = self._height + 1
+
+        # Create a width * height canvas of spaces.
+        canvas = bytearray(w * h)
+        for row in range(h):
+            for col in range(w - 1):
+                canvas[row * w + col] = ord(' ')
+            canvas[row * w + w - 1] = ord('\n')
+        for u in self._tree.nodes():
+            col = self._x_coords[u]
+            row = self._y_coords[u]
+            j = row * w + col
+            label = self._node_label_text[u].encode()
+            n = len(label)
+            canvas[j - n // 2: j + n // 2 + int(n % 2 == 1)] = label
+            if self._tree.is_internal(u):
+                children = self._tree.children(u)
+                row += 1
+                left = min(self._x_coords[v] for v in children)
+                right = max(self._x_coords[v] for v in children)
+                for col in range(left, right):
+                    canvas[row * w + col] = ord('-')
+                canvas[row * w + self._x_coords[u]] = ord('+')
+                top = row + 1
+                for v in children:
+                    col = self._x_coords[v]
+                    for row in range(top, self._y_coords[v] - 1):
+                        canvas[row * w + col] = ord('|')
+        return str(bytes(canvas).decode())
 
 # TODO:
 # - Pickle and copy support
 class SparseTree(object):
     """
     A SparseTree is a single tree in a :class:`.TreeSequence`. In a sparse tree
-    for a sample of size :math:`n`, the leaves are nodes :math:`0` to :math:`n
+    for a sample of size :math:`n`, the samples are nodes :math:`0` to :math:`n
     - 1` inclusive and internal nodes are integers :math:`\geq n`. The value of
     these nodes is strictly increasing as we ascend the tree and the root of
     the tree is the node with the largest value that is reachable from  the
-    leaves. Each node in the tree has a parent which is obtained using the
+    samples. Each node in the tree has a parent which is obtained using the
     :meth:`.get_parent` method. The parent of the root node is the
     :const:`.NULL_NODE`, :math:`-1`. Similarly, each internal node has a
     pair of children, which are obtained using the :meth:`.get_children`
@@ -483,7 +803,7 @@ class SparseTree(object):
     def get_parent(self, u):
         """
         Returns the parent of the specified node. Returns
-        the :const:`.NULL_NODE` -1 if u is the root or is not a node in
+        the :const:`.NULL_NODE` if u is the root or is not a node in
         the current tree.
 
         :param int u: The node of interest.
@@ -500,7 +820,7 @@ class SparseTree(object):
         Returns the children of the specified node as a tuple :math:`(v, w)`.
         For internal nodes, this tuple is always in sorted order such that
         :math:`v < w`. If u is a leaf or is not a node in the current tree,
-        return the tuple (:const:`.NULL_NODE`, :const:`.NULL_NODE`).
+        return the empty tuple.
 
         :param int u: The node of interest.
         :return: The children of u as a pair of integers
@@ -514,7 +834,7 @@ class SparseTree(object):
     def get_time(self, u):
         """
         Returns the time of the specified node in generations. Returns 0 if u
-        is a leaf or is not a node in the current tree.
+        is not a node in the current tree.
 
         :param int u: The node of interest.
         :return: The time of u.
@@ -527,9 +847,7 @@ class SparseTree(object):
 
     def get_population(self, u):
         """
-        Returns the population associated with the specified node. For leaf
-        nodes this is the population of the sample, and for internal nodes this
-        is the population where the corresponding coalescence occured. If the
+        Returns the population associated with the specified node. If the
         specified node is not a member of this tree or population level
         information was not stored in the tree sequence,
         :const:`.NULL_POPULATION` is returned.
@@ -542,7 +860,8 @@ class SparseTree(object):
 
     def is_internal(self, u):
         """
-        Returns True if the specified node is not a leaf.
+        Returns True if the specified node is not a leaf. A node is internal
+        if it has one or more children in the current tree.
 
         :param int u: The node of interest.
         :return: True if u is not a leaf node.
@@ -561,9 +880,24 @@ class SparseTree(object):
         """
         return len(self.children(u)) == 0
 
+    def is_sample(self, u):
+        """
+        Returns True if the specified node is a sample. A node :math:`u` is a
+        sample if it has been marked as a sample in the parent tree sequence.
+
+        :param int u: The node of interest.
+        :return: True if u is a sample.
+        :rtype: bool
+        """
+        return bool(self._ll_sparse_tree.is_sample(u))
+
     @property
     def num_nodes(self):
-        # TODO documnent
+        """
+        Returns the number of nodes in the sparse tree.
+
+        :rtype: int
+        """
         return self._ll_sparse_tree.get_num_nodes()
 
     @property
@@ -638,18 +972,25 @@ class SparseTree(object):
 
     def get_sample_size(self):
         """
-        Returns the sample size for this tree. This is the number of leaf
+        Returns the sample size for this tree. This is the number of sample
         nodes in the tree.
 
-        :return: The number of leaf nodes in the tree.
+        :return: The number of sample nodes in the tree.
         :rtype: int
         """
         return self._ll_sparse_tree.get_sample_size()
 
     def draw(
+<<<<<<< HEAD
             self, path=None, width=200, height=200, show_times=False,
             show_mutation_labels=False, show_internal_node_labels=True,
             show_leaf_node_labels=True, branch_colours=None, node_colours=None):
+=======
+            self, path=None, width=200, height=200, times=False,
+            mutation_locations=True, mutation_labels=False,
+            internal_node_labels=True, leaf_node_labels=True, show_times=None,
+            node_label_text=None, format=None):
+>>>>>>> master
         """
         Returns a representation of this tree in SVG format.
 
@@ -657,6 +998,7 @@ class SparseTree(object):
             write to file.
         :param int width: The width of the image in pixels.
         :param int height: The height of the image in pixels.
+<<<<<<< HEAD
         :param bool show_times: If True, show time labels at each internal
             node.
         :param bool show_mutation_labels: If True, show labels for mutations.
@@ -682,10 +1024,57 @@ class SparseTree(object):
                 show_leaf_node_labels=show_leaf_node_labels,
                 branch_colours=branch_colours, node_colours=node_colours, )
         svg = td.draw()
+=======
+        :param bool times: If True, show time labels at each internal node.
+        :param bool mutation_locations: If True, show mutations as points over nodes.
+        :param bool mutation_labels: If True, show labels for mutations.
+        :param bool internal_node_labels: If True, show labels for internal nodes.
+        :param bool leaf_node_labels: If True, show labels for leaf nodes.
+        :param map node_label_text: If specified, show custom labels for the nodes
+            that are present in the map. Any nodes not specified in the map will
+            have have their default labels.
+        :param str format: The format of the returned image. Currently supported
+            are 'svg' and 'ascii'.
+        :param bool show_times: Deprecated alias for ``times``.
+        :return: A representation of this tree in SVG format.
+        :rtype: str
+        """
+        # show_times is a deprecated alias for times.
+        if show_times is not None:
+            times = show_times
+        if format is None:
+            format = "SVG"
+        fmt = format.lower()
+        supported_formats = ["svg", "ascii"]
+        if fmt not in supported_formats:
+            raise ValueError("Unknown format '{}'. Supported formats are {}".format(
+                format, supported_formats))
+        if fmt == "svg":
+            if not _svgwrite_imported:
+                raise ImportError(
+                    "svgwrite is not installed. try `pip install svgwrite`")
+            td = SvgTreeDrawer(
+                    self, width=width, height=height, show_times=times,
+                    show_mutation_locations=mutation_locations,
+                    show_mutation_labels=mutation_labels,
+                    show_internal_node_labels=internal_node_labels,
+                    show_leaf_node_labels=leaf_node_labels,
+                    node_label_text=node_label_text,
+                    y_padding=20, x_padding=0)
+        elif fmt == "ascii":
+            td = AsciiTreeDrawer(
+                    self, width=width, height=height, show_times=times,
+                    show_mutation_locations=mutation_locations,
+                    show_mutation_labels=mutation_labels,
+                    show_internal_node_labels=internal_node_labels,
+                    node_label_text=node_label_text,
+                    show_leaf_node_labels=leaf_node_labels)
+        output = td.draw()
+>>>>>>> master
         if path is not None:
             with open(path, "w") as f:
-                f.write(svg)
-        return svg
+                f.write(output)
+        return output
 
     @property
     def num_mutations(self):
@@ -734,68 +1123,121 @@ class SparseTree(object):
                 yield DeprecatedMutation(
                     position=site.position, node=mutation.node, index=site.index)
 
-    def _leaf_generator(self, u):
-        for v in self.nodes(u):
-            if self.is_leaf(v):
-                yield v
+    def get_leaves(self, u):
+        # Deprecated alias for samples. See the discussion in the get_num_leaves
+        # method for why this method is here and why it is semantically incorrect.
+        # The 'leaves' iterator below correctly returns the leaves below a given
+        # node.
+        return self.samples(u)
 
-    def leaves(self, u):
+    def leaves(self, u=None):
         """
-        Returns an iterator over all the leaves in this tree underneath
-        the specified node.
-
-        If the :meth:`.TreeSequence.trees` method is called with
-        ``leaf_lists=True``, this method uses an efficient algorithm to find
-        the leaves. If not, a simple traversal based method is used.
+        Returns an iterator over all the leaves in this tree that are
+        underneath the specified node. If u is not specified, return all leaves
+        in the tree.
 
         :param int u: The node of interest.
         :return: An iterator over all leaves in the subtree rooted at u.
         :rtype: iterator
         """
-        if self._ll_sparse_tree.get_flags() & _msprime.LEAF_LISTS:
-            return _msprime.LeafListIterator(self._ll_sparse_tree, u)
-        else:
-            return self._leaf_generator(u)
+        if u is None:
+            u = self.root
+        for v in self.nodes(u):
+            if self.is_leaf(v):
+                yield v
 
-    def num_leaves(self, u):
-        return self.get_num_leaves(u)
+    def _sample_generator(self, u):
+        for v in self.nodes(u):
+            if self.is_sample(v):
+                yield v
 
-    def get_num_leaves(self, u):
+    def samples(self, u=None):
         """
-        Returns the number of leaves in this tree underneath the specified
-        node.
+        Returns an iterator over all the samples in this tree that are
+        underneath the specified node. If u is a sample, it is included in the
+        returned iterator. If u is not specified, return all samples in the tree.
 
         If the :meth:`.TreeSequence.trees` method is called with
-        ``leaf_counts=True`` this method is a constant time operation. If not,
-        a slower traversal based algorithm is used to count the leaves.
+        ``sample_lists=True``, this method uses an efficient algorithm to find
+        the samples. If not, a simple traversal based method is used.
 
         :param int u: The node of interest.
-        :return: The number of leaves in the subtree rooted at u.
+        :return: An iterator over all samples in the subtree rooted at u.
+        :rtype: iterator
+        """
+        if u is None:
+            u = self.root
+        if self._ll_sparse_tree.get_flags() & _msprime.SAMPLE_LISTS:
+            return _msprime.SampleListIterator(self._ll_sparse_tree, u)
+        else:
+            return self._sample_generator(u)
+
+    def get_num_leaves(self, u):
+        # Deprecated alias for num_samples. The method name is inaccurate
+        # as this will count the number of tracked _samples_. This is only provided to
+        # avoid breaking existing code and should not be used in new code. We could
+        # change this method to be semantically correct and just count the
+        # number of leaves we hit in the leaves() iterator. However, this would
+        # have the undesirable effect of making code that depends on the constant
+        # time performance of get_num_leaves many times slower. So, the best option
+        # is to leave this method as is, and to slowly deprecate it out. Once this
+        # has been removed, we might add in a ``num_leaves`` method that returns the
+        # length of the leaves() iterator as one would expect.
+        return self.num_samples(u)
+
+    def num_samples(self, u=None):
+        return self.get_num_samples(u)
+
+    def get_num_samples(self, u=None):
+        """
+        Returns the number of samples in this tree underneath the specified
+        node (including the node itself). If u is not specified return
+        the total number of samples in the tree.
+
+        If the :meth:`.TreeSequence.trees` method is called with
+        ``sample_counts=True`` this method is a constant time operation. If not,
+        a slower traversal based algorithm is used to count the samples.
+
+        :param int u: The node of interest.
+        :return: The number of samples in the subtree rooted at u.
         :rtype: int
         """
-        return self._ll_sparse_tree.get_num_leaves(u)
-
-    def num_tracked_leaves(self, u):
-        return self.get_num_tracked_leaves(u)
+        if u is None:
+            u = self.root
+        return self._ll_sparse_tree.get_num_samples(u)
 
     def get_num_tracked_leaves(self, u):
+        # Deprecated alias for num_tracked_samples. The method name is inaccurate
+        # as this will count the number of tracked _samples_. This is only provided to
+        # avoid breaking existing code and should not be used in new code.
+        return self.num_tracked_samples(u)
+
+    def num_tracked_samples(self, u=None):
+        return self.get_num_tracked_samples(u)
+
+    def get_num_tracked_samples(self, u=None):
         """
-        Returns the number of leaves in the set specified in the
-        ``tracked_leaves`` parameter of the :meth:`.TreeSequence.trees` method
-        underneath the specified node. This is a constant time operation.
+        Returns the number of samples in the set specified in the
+        ``tracked_samples`` parameter of the :meth:`.TreeSequence.trees` method
+        underneath the specified node. If the input node is not specified,
+        return the total number of tracked samples in the tree.
+
+        This is a constant time operation.
 
         :param int u: The node of interest.
-        :return: The number of leaves within the set of tracked leaves in
+        :return: The number of samples within the set of tracked samples in
             the subtree rooted at u.
         :rtype: int
         :raises RuntimeError: if the :meth:`.TreeSequence.trees`
-            method is not called with ``leaf_counts=True``.
+            method is not called with ``sample_counts=True``.
         """
-        if not (self._ll_sparse_tree.get_flags() & _msprime.LEAF_COUNTS):
+        if u is None:
+            u = self.root
+        if not (self._ll_sparse_tree.get_flags() & _msprime.SAMPLE_COUNTS):
             raise RuntimeError(
-                "The get_num_tracked_leaves method is only supported "
-                "when leaf_counts=True.")
-        return self._ll_sparse_tree.get_num_tracked_leaves(u)
+                "The get_num_tracked_samples method is only supported "
+                "when sample_counts=True.")
+        return self._ll_sparse_tree.get_num_tracked_samples(u)
 
     def _preorder_traversal(self, u):
         stack = [u]
@@ -817,16 +1259,15 @@ class SparseTree(object):
                 yield stack.pop()
 
     def _inorder_traversal(self, u):
-        stack = [u]
-        k, j = NULL_NODE, NULL_NODE
-        while stack:
-            v = stack.pop()
-            if self.is_internal(v) and v != k and v != j:
-                children = self.get_children(v)
-                j = stack[-1] if stack else NULL_NODE
-                stack.extend([children[1], v, children[0]])
-            else:
-                k = self.get_parent(v)
+        # TODO add a nonrecursive version of the inorder traversal.
+        children = self.get_children(u)
+        mid = len(children) // 2
+        for c in children[:mid]:
+            for v in self._inorder_traversal(c):
+                yield v
+        yield u
+        for c in children[mid:]:
+            for v in self._inorder_traversal(c):
                 yield v
 
     def _levelorder_traversal(self, u):
@@ -1163,7 +1604,12 @@ def load_tables(*args, **kwargs):
 
 def parse_nodes(source):
     """
-    Parse the specified file-like object and return a NodeTable instance.
+    Parse the specified file-like object and return a NodeTable instance.  The
+    object must contain text with whitespace delimited columns, which are
+    labeled with headers and contain columns ``is_sample``, ``time``, and
+    optionally, ``population``.  Further requirements are described in
+    :class:`NodeTable`.  Note that node ``id`` is not included, but implied by
+    order in the file.
     """
     # Read the header and find the indexes of the required fields.
     table = NodeTable()
@@ -1192,7 +1638,12 @@ def parse_nodes(source):
 
 def parse_edgesets(source):
     """
-    Parse the specified file-like object and return a EdgesetTableTable instance.
+    Parse the specified file-like object and return a EdgesetTable instance.
+    The object must contain text with whitespace delimited columns, which are
+    labeled with headers and contain columns ``left``, ``right``, ``parent``,
+    and ``children``.  The ``children`` field is a comma-separated list of base
+    10 integer values.  Further requirements are described in
+    :class:`EdgesetTable`.
     """
     table = EdgesetTable()
     header = source.readline().split()
@@ -1215,7 +1666,11 @@ def parse_edgesets(source):
 
 def parse_sites(source):
     """
-    Parse the specified file-like object and return a SiteTable instance.
+    Parse the specified file-like object and return a SiteTable instance.  The
+    object must contain text with whitespace delimited columns, which are
+    labeled with headers and contain columns ``position`` and
+    ``ancestral_state``.  Further requirements are described in
+    :class:`SiteTable`.
     """
     header = source.readline().split()
     position_index = header.index("position")
@@ -1233,6 +1688,10 @@ def parse_sites(source):
 def parse_mutations(source):
     """
     Parse the specified file-like object and return a MutationTable instance.
+    The object must contain text with whitespace delimited columns, which are
+    labeled with headers and contain columns ``site``, ``node``, and
+    ``derived_state``.  Further requirements are described in
+    :class:`MutationTable`.
     """
     header = source.readline().split()
     site_index = header.index("site")
@@ -1253,73 +1712,78 @@ def load_text(nodes, edgesets, sites=None, mutations=None):
     """
     Loads a tree sequence from the specified file paths. The files input here
     are in a simple whitespace delimited tabular format such as output by the
-    :meth:`.TreeSequence.write_records` and
-    :meth:`.TreeSequence.write_mutations` methods. This method is intended as a
+    :meth:`.TreeSequence.dump_text` method.  This method is intended as a
     convenient interface for importing external data into msprime; the HDF5
     based file format using by :meth:`msprime.load` will be many times more
     efficient that using the text based formats.
 
-    The ``records_file`` must be a text file with six whitespace delimited
-    columns. Each line in the file must contain at least this many columns, and
-    each line will be stored as a single coalescence record. The columns
-    correspond to the ``left``, ``right``, ``node``, ``children``, ``time`` and
-    ``population`` fields as described in the :meth:`.TreeSequence.records`
-    method. The ``left``, ``right`` and ``time`` fields are parsed as base 10
-    floating point values, and the ``node`` and ``population`` fields are
-    parsed as base 10 integers. The ``children`` field is a comma-separated
-    list of base 10 integer values, and must contain at least two elements. The
-    file may optionally begin with a header line; if the first line begins with
-    the text "left" it will be ignored.
+    ``nodes`` and ``edgesets`` must be a file-like object containing text with
+    whitespace delimited columns,  parsable by :func:`parse_nodes` and
+    :func:`parse_edgesets`, respectively.  Further requirements are described
+    in :class:`NodeTable` and :class:`EdgesetTable`.
 
-    Records must be listed in the file in non-decreasing order of the time
-    field. Within a record, children must be listed in increasing order of node
-    value. The left and right coordinates must be non-negative values.
+    ``sites`` and ``mutations`` are optional, but if included must be similar,
+    parsable by :func:`parse_sites` and :func:`parse_mutations`, respecively.
+    Further requirements are described in :class:`SiteTable` and
+    :class:`MutationTable`.
 
     An example of a simple tree sequence for four samples with
-    three distinct trees is::
+    three distinct trees is as follows.
 
-        left    right   node    children    time    population
-        2       10      4       2,3         0.071    0
-        0       2       5       1,3         0.090    0
-        2       10      5       1,4         0.090    0
-        0       7       6       0,5         0.170    0
-        7       10      7       0,5         0.202    0
-        0       2       8       2,6         0.253    0
+    nodes::
+
+        is_sample   time    population
+        1           0.0     0
+        1           0.0     0
+        1           0.0     0
+        1           0.0     0
+        0           0.071   0
+        0           0.090   0
+        0           0.170   0
+        0           0.202   0
+        0           0.253   0
+
+    edgesets::
+
+        left    right   node    children
+        2       10      4       2,3
+        0       2       5       1,3
+        2       10      5       1,4
+        0       7       6       0,5
+        7       10      7       0,5
+        0       2       8       2,6
+
 
     This example is equivalent to the tree sequence illustrated in Figure 4 of
     the `PLoS Computational Biology paper
     <http://dx.doi.org/10.1371/journal.pcbi.1004842>`_. Nodes are given here in
     time order (since this is a backwards-in-time tree sequence), but they may
     be allocated in any order. In particular, left-to-right tree sequences are
-    fully supported. However, the smallest value in the ``node`` column must be
-    equal to the sample size, and there must not be 'gaps' in the node address
-    space.
+    fully supported.
 
-    The optional ``mutations_file`` has a similiar format, but contains only
-    two columns. These correspond to the ``position`` and ``node`` fields as
-    described in the :meth:`.TreeSequence.mutations` method. The ``position``
-    field is parsed as a base 10 floating point value, and the ``node`` field
-    is parsed as a base 10 integer. The file may optionally begin with a header
-    line; if the first line begins with the text "position" it will be ignored.
+    An example of a ``sites`` and ``mutations`` file for the tree sequence
+    defined in the previous example is as follows.
 
-    Mutations must be listed in non-decreasing order of position, and the nodes
-    must refer to a node defined by the records. Mutations defined over the
-    root or a node not present in a local tree will lead to an error being
-    produced during tree traversal (e.g. in the :meth:`.TreeSequence.trees`
-    method, but also in many other methods).
+    sites::
 
-    An example of a mutations file for the tree sequence defined in the
-    previous example is::
-
-        position    node
+        position    ancestral_state
         0.1         0
-        8.5         4
+        8.5         0
 
-    :param str records_file: The path of the text file containing
-        the coalescence records for the desired tree sequence.
-    :param str mutations_file: The path of the text file containing
-        the mutation records for the desired tree sequence. This
-        argument is optional and defaults to None.
+    mutations::
+
+        site    node    derived_state
+        0       3       1
+        1       6       1
+        1       0       0
+
+
+    :param stream nodes: The file-type object containing text describing a NodeTable.
+    :param stream edgesets: The file-type object containing text
+        describing a EdgesetTable.
+    :param stream sites: The file-type object containing text describing a SiteTable.
+    :param stream mutations: The file-type object containing text
+        describing a MutationTable.
     :return: The tree sequence object containing the information
         stored in the specified file paths.
     :rtype: :class:`msprime.TreeSequence`
@@ -1776,6 +2240,19 @@ class TreeSequence(object):
     def dump_tables(
             self, nodes=None, edgesets=None, migrations=None, sites=None,
             mutations=None):
+        """
+        Copy the contents of the tables underlying the tree sequence to the
+        specified objects.
+
+        :param NodeTable nodes: The NodeTable to load the nodes into.
+        :param EdgesetTable edgesets: The EdgesetTable to load the edgesets into.
+        :param MigrationTable migrations: The MigrationTable to load the migrations into.
+        :param SiteTable sites: The SiteTable to load the sites into.
+        :param MutationTable mutations: The NodeTable to load the mutations into.
+
+        :return: A TableTuple containing all tables underlying the tree sequence.
+        :rtype: TableTuple
+        """
         # TODO document this and test the semantics to passing in new tables
         # as well as returning the updated tables.
         if nodes is None:
@@ -1884,9 +2361,9 @@ class TreeSequence(object):
     def get_sample_size(self):
         """
         Returns the sample size for this tree sequence. This is the number
-        of leaf nodes in each tree.
+        of sample nodes in each tree.
 
-        :return: The number of leaf nodes in the tree sequence.
+        :return: The number of sample nodes in the tree sequence.
         :rtype: int
         """
         return self._ll_tree_sequence.get_sample_size()
@@ -2043,7 +2520,7 @@ class TreeSequence(object):
         tuples, and these describe the records that must be applied to create
         the tree covering the current interval. These records are returned in
         time-increasing order, such that the records affecting the lowest parts
-        of the tree (i.e., closest to the leaves) are returned first.
+        of the tree (i.e., closest to the present day) are returned first.
 
         :return: An iterator over the diffs between adjacent trees in this
             tree sequence.
@@ -2102,23 +2579,25 @@ class TreeSequence(object):
         for t in self.trees():
             yield t.get_interval()[1]
 
-    def trees(self, tracked_leaves=None, leaf_counts=True, leaf_lists=False):
+    def trees(
+            self, tracked_samples=None, sample_counts=True, sample_lists=False,
+            tracked_leaves=None, leaf_counts=None, leaf_lists=None):
         """
         Returns an iterator over the trees in this tree sequence. Each value
         returned in this iterator is an instance of
         :class:`.SparseTree`.
 
-        The ``leaf_counts`` and ``leaf_lists`` parameters control the
-        features that are enabled for the resulting trees. If ``leaf_counts``
-        is True, then it is possible to count the number of leaves underneath
-        a particular node in constant time using the :meth:`.get_num_leaves`
-        method. If ``leaf_lists`` is True a more efficient algorithm is
-        used in the :meth:`.SparseTree.leaves` method.
+        The ``sample_counts`` and ``sample_lists`` parameters control the
+        features that are enabled for the resulting trees. If ``sample_counts``
+        is True, then it is possible to count the number of samples underneath
+        a particular node in constant time using the :meth:`.get_num_samples`
+        method. If ``sample_lists`` is True a more efficient algorithm is
+        used in the :meth:`.SparseTree.samples` method.
 
-        The ``tracked_leaves`` parameter can be used to efficiently count the
-        number of leaves in a given set that exist in a particular subtree
-        using the :meth:`.SparseTree.get_num_tracked_leaves` method. It is an
-        error to use the ``tracked_leaves`` parameter when the ``leaf_counts``
+        The ``tracked_samples`` parameter can be used to efficiently count the
+        number of samples in a given set that exist in a particular subtree
+        using the :meth:`.SparseTree.get_num_tracked_samples` method. It is an
+        error to use the ``tracked_samples`` parameter when the ``sample_counts``
         flag is False.
 
         :warning: Do not store the results of this iterator in a list!
@@ -2126,28 +2605,38 @@ class TreeSequence(object):
            for every tree returned which will most likely lead to unexpected
            behaviour.
 
-        :param list tracked_leaves: The list of leaves to be tracked and
-            counted using the :meth:`.SparseTree.get_num_tracked_leaves`
+        :param list tracked_samples: The list of samples to be tracked and
+            counted using the :meth:`.SparseTree.get_num_tracked_samples`
             method.
-        :param bool leaf_counts: If True, support constant time leaf counts
-            via the :meth:`.SparseTree.get_num_leaves` and
-            :meth:`.SparseTree.get_num_tracked_leaves` methods.
-        :param bool leaf_lists: If True, provide more efficient access
-            to the leaves beneath a give node using the
-            :meth:`.SparseTree.leaves` method.
+        :param bool sample_counts: If True, support constant time sample counts
+            via the :meth:`.SparseTree.get_num_samples` and
+            :meth:`.SparseTree.get_num_tracked_samples` methods.
+        :param bool sample_lists: If True, provide more efficient access
+            to the samples beneath a give node using the
+            :meth:`.SparseTree.samples` method.
         :return: An iterator over the sparse trees in this tree sequence.
         :rtype: iter
         """
-        flags = 0
-        if leaf_counts:
-            flags |= _msprime.LEAF_COUNTS
-        elif tracked_leaves is not None:
-            raise ValueError("Cannot set tracked_leaves without leaf_counts")
-        if leaf_lists:
-            flags |= _msprime.LEAF_LISTS
-        kwargs = {"flags": flags}
+        # tracked_leaves, leaf_counts and leaf_lists are deprecated aliases
+        # for tracked_samples, sample_counts and sample_lists respectively.
+        # These are left over from an older version of the API when leaves
+        # and samples were synonymous.
         if tracked_leaves is not None:
-            kwargs["tracked_leaves"] = tracked_leaves
+            tracked_samples = tracked_leaves
+        if leaf_counts is not None:
+            sample_counts = leaf_counts
+        if leaf_lists is not None:
+            sample_lists = leaf_lists
+        flags = 0
+        if sample_counts:
+            flags |= _msprime.SAMPLE_COUNTS
+        elif tracked_samples is not None:
+            raise ValueError("Cannot set tracked_samples without sample_counts")
+        if sample_lists:
+            flags |= _msprime.SAMPLE_LISTS
+        kwargs = {"flags": flags}
+        if tracked_samples is not None:
+            kwargs["tracked_samples"] = tracked_samples
         ll_sparse_tree = _msprime.SparseTree(self._ll_tree_sequence, **kwargs)
         iterator = _msprime.SparseTreeIterator(ll_sparse_tree)
         sparse_tree = SparseTree(ll_sparse_tree)
@@ -2248,55 +2737,364 @@ class TreeSequence(object):
         :rtype: float
         """
         if samples is None:
-            leaves = self.samples()
+            samples = self.samples()
         else:
-            leaves = list(samples)
-        return self._ll_tree_sequence.get_pairwise_diversity(leaves)
+            samples = list(samples)
+        return self._ll_tree_sequence.get_pairwise_diversity(samples)
 
-    def branch_stats(self, leaf_sets, weight_fun):
+    def mean_pairwise_tmrca(self, sample_sets, windows):
+        """
+        Finds the mean time to most recent common ancestor between pairs of samples
+        as described in mean_pairwise_tmrca_matrix (which uses this function).
+        Returns the upper triangle (including the diagonal) in row-major order,
+        so if the output is `x`, then:
+
+        >>> k=0
+        >>> for w in range(len(windows)-1):
+        >>>     for i in range(len(sample_sets)):
+        >>>         for j in range(i,len(sample_sets)):
+        >>>             trmca[i,j] = tmrca[j,i] = x[w][k]
+        >>>             k += 1
+
+        will fill out the matrix of mean TMRCAs in the `i`th window between (and
+        within) each group of samples in `sample_sets` in the matrix `tmrca`.
+        Alternatively, if `names` labels the sample_sets, the output labels are:
+
+        >>> [".".join(names[i],names[j]) for i in range(len(names))
+        >>>         for j in range(i,len(names))]
+
+        :param list sample_sets: A list of sets of IDs of samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of the upper triangle of mean TMRCA values in row-major
+            order, including the diagonal.
+        """
+        ns = len(sample_sets)
+        n = [len(x) for x in sample_sets]
+
+        def f(x):
+            return [float(x[i]*(n[j]-x[j]) + (n[i]-x[i])*x[j])
+                    for i in range(ns) for j in range(i, ns)]
+
+        out = self.branch_stats_vector(sample_sets, weight_fun=f, windows=windows)
+        # move this division outside of f(x) so it only has to happen once
+        # corrects the diagonal for self comparisons
+        # and note factor of two for tree length -> real time
+        for w in range(len(windows)-1):
+            k = 0
+            for i in range(ns):
+                for j in range(i, ns):
+                    if i == j:
+                        if n[i] == 1:
+                            out[w][k] = np.nan
+                        else:
+                            out[w][k] /= float(2 * n[i] * (n[i] - 1))
+                    else:
+                        out[w][k] /= float(2 * n[i] * n[j])
+                    k += 1
+
+        return out
+
+    def mean_pairwise_tmrca_matrix(self, sample_sets, windows):
+        """
+        Finds the mean time to most recent common ancestor between pairs of
+        samples from each set of samples and in each window. Returns a numpy
+        array indexed by (window, sample_set, sample_set).  Diagonal entries are
+        corrected so that the value gives the mean pairwise TMRCA for *distinct*
+        samples, but it is not checked whether the sample_sets are disjoint
+        (so offdiagonals are not corrected).  For this reason, if an element of
+        `sample_sets` has only one element, the corresponding diagonal will be
+        NaN.
+
+        The mean TMRCA between two samples is defined to be one-half the length
+        of all edges separating them in the tree at a uniformly chosen position
+        on the genome.
+
+        :param list sample_sets: A list of sets of IDs of samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of the upper triangle of mean TMRCA values in row-major
+            order, including the diagonal.
+        """
+        x = self.mean_pairwise_tmrca(sample_sets, windows)
+        ns = len(sample_sets)
+        nw = len(windows) - 1
+        A = np.ones((nw, ns, ns), dtype=float)
+        for w in range(nw):
+            k = 0
+            for i in range(ns):
+                for j in range(i, ns):
+                    A[w, i, j] = A[w, j, i] = x[w][k]
+                    k += 1
+        return A
+
+    def Y_vector(self, sample_sets, windows, indices):
+        """
+        Finds the 'Y' statistic between three sample_sets.  The sample_sets should
+        be disjoint (the computation works fine, but if not the result depends
+        on the amount of overlap).  If the sample_sets are A, B, and C, then the
+        result gives the mean total length of any edge in the tree between a
+        and the most recent common ancestor of b and c, where a, b, and c are
+        random draws from A, B, and C respectively.
+
+        The result is, for each window, a vector whose k-th entry is
+            Y(sample_sets[indices[k][0]], sample_sets[indices[k][1]],
+              sample_sets[indices[k][2]]).
+
+        :param list sample_sets: A list of *three* sets of IDs of samples: (A,B,C).
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :param list indices: A list of triples of indices of sample_sets.
+        :return: A list of numeric vectors of length equal to the length of
+            indices, computed separately on each window.
+        """
+        for u in indices:
+            if not len(u) == 3:
+                raise ValueError("All indices should be of length 3.")
+        n = [len(x) for x in sample_sets]
+
+        def f(x):
+            return [float(x[i] * (n[j] - x[j]) * (n[k] - x[k])
+                          + (n[i] - x[i]) * x[j] * x[k]) for i, j, k in indices]
+
+        out = self.branch_stats_vector(sample_sets, weight_fun=f, windows=windows)
+        # move this division outside of f(x) so it only has to happen once
+        # corrects the diagonal for self comparisons
+        for w in range(len(windows)-1):
+            for u in range(len(indices)):
+                out[w][u] /= float(n[indices[u][0]] * n[indices[u][1]]
+                                   * n[indices[u][2]])
+
+        return out
+
+    def Y(self, sample_sets, windows):
+        """
+        Finds the 'Y' statistic between the three groups of samples
+        in sample_sets. The sample_sets should be disjoint (the computation works
+        fine, but if not the result depends on the amount of overlap).
+        If the sample_sets are A, B, and C, then the result gives the mean total
+        length of any edge in the tree between a and the most recent common
+        ancestor of b and c, where a, b, and c are random draws from A, B, and
+        C respectively.
+
+        :param list sample_sets: A list of *three* sets of IDs of samples: (A,B,C).
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of numeric values computed separately on each window.
+        """
+        return self.Y_vector(sample_sets, windows, indices=[(0, 1, 2)])
+
+    def f4_vector(self, sample_sets, windows, indices):
+        """
+        Finds the Patterson's f4 statistics between multiple subsets of four
+        groups of sample_sets. The sample_sets should be disjoint (the computation
+        works fine, but if not the result depends on the amount of overlap).
+
+        :param list sample_sets: A list of four sets of IDs of samples: (A,B,C,D)
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :param list indices: A list of 4-tuples of indices of sample_sets.
+        :return: A list of values of f4(A,B;C,D) of length equal to the length of
+            indices, computed separately on each window.
+        """
+        for u in indices:
+            if not len(u) == 4:
+                raise ValueError("All tuples in indices should be of length 4.")
+        n = [len(x) for x in sample_sets]
+
+        def f(x):
+            return [float((x[i] * n[j] - x[j] * n[i]) * (x[k] * n[l] - x[l] * n[k]))
+                    for i, j, k, l in indices]
+
+        out = self.branch_stats_vector(sample_sets, weight_fun=f, windows=windows)
+        # move this division outside of f(x) so it only has to happen once
+        # corrects the diagonal for self comparisons
+        for w in range(len(windows)-1):
+            for u in range(len(indices)):
+                out[w][u] /= float(n[indices[u][0]] * n[indices[u][1]]
+                                   * n[indices[u][2]] * n[indices[u][3]])
+
+        return out
+
+    def f4(self, sample_sets, windows):
+        """
+        Finds the Patterson's f4 statistics between the four groups of samples
+        in sample_sets. The sample_sets should be disjoint (the computation works
+        fine, but if not the result depends on the amount of overlap).
+
+        :param list sample_sets: A list of four sets of IDs of samples: (A,B,C,D)
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of values of f4(A,B;C,D) computed separately on each window.
+        """
+        if not len(sample_sets) == 4:
+            raise ValueError("sample_sets should be of length 4.")
+        return self.f4_vector(sample_sets, windows, indices=[(0, 1, 2, 3)])
+
+    def f3_vector(self, sample_sets, windows, indices):
+        """
+        Finds the Patterson's f3 statistics between multiple subsets of three
+        groups of samples in sample_sets. The sample_sets should be disjoint (the
+        computation works fine, but if not the result depends on the amount of
+        overlap).
+
+        f3(A;B,C) is f4(A,B;A,C) corrected to not include self comparisons.
+
+        If A does not contain at least three samples, the result is NaN.
+
+        :param list sample_sets: A list of sets of IDs of samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :param list indices: A list of triples of indices of sample_sets.
+        :return: A list of values of f3(A,B,C) computed separately on each window.
+        """
+        for u in indices:
+            if not len(u) == 3:
+                raise ValueError("All tuples in indices should be of length 3.")
+        n = [len(x) for x in sample_sets]
+
+        def f(x):
+            return [float(x[i] * (x[i] - 1) * (n[j] - x[j]) * (n[k] - x[k])
+                          + (n[i] - x[i]) * (n[i] - x[i] - 1) * x[j] * x[k]
+                          - x[i] * (n[i] - x[i]) * (n[j] - x[j]) * x[k]
+                          - (n[i] - x[i]) * x[i] * x[j] * (n[k] - x[k]))
+                    for i, j, k in indices]
+
+        out = self.branch_stats_vector(sample_sets, weight_fun=f, windows=windows)
+        # move this division outside of f(x) so it only has to happen once
+        for w in range(len(windows)-1):
+            for u in range(len(indices)):
+                if n[indices[u][0]] == 1:
+                    out[w][u] = np.nan
+                else:
+                    out[w][u] /= float(n[indices[u][0]] * (n[indices[u][0]]-1)
+                                       * n[indices[u][1]] * n[indices[u][2]])
+
+        return out
+
+    def f3(self, sample_sets, windows):
+        """
+        Finds the Patterson's f3 statistics between the three groups of samples
+        in sample_sets. The sample_sets should be disjoint (the computation works
+        fine, but if not the result depends on the amount of overlap).
+
+        f3(A;B,C) is f4(A,B;A,C) corrected to not include self comparisons.
+
+        :param list sample_sets: A list of *three* sets of IDs of samples: (A,B,C),
+            with the first set having at least two samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of values of f3(A,B,C) computed separately on each window.
+        """
+        if not len(sample_sets) == 3:
+            raise ValueError("sample_sets should be of length 3.")
+        return self.f3_vector(sample_sets, windows, indices=[(0, 1, 2)])
+
+    def f2_vector(self, sample_sets, windows, indices):
+        """
+        Finds the Patterson's f2 statistics between multiple subsets of pairs
+        of samples in sample_sets. The sample_sets should be disjoint (the
+        computation works fine, but if not the result depends on the amount of
+        overlap).
+
+        f2(A;B) is f4(A,B;A,B) corrected to not include self comparisons.
+
+        :param list sample_sets: A list of sets of IDs of samples, each having at
+            least two samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :param list indices: A list of pairs of indices of sample_sets.
+        :return: A list of values of f2(A,C) computed separately on each window.
+        """
+        for u in indices:
+            if not len(u) == 2:
+                raise ValueError("All tuples in indices should be of length 2.")
+        n = [len(x) for x in sample_sets]
+        for xlen in n:
+            if not xlen > 1:
+                raise ValueError("All sample_sets must have at least two samples.")
+
+        def f(x):
+            return [float(x[i] * (x[i] - 1) * (n[j] - x[j]) * (n[j] - x[j] - 1)
+                          + (n[i] - x[i]) * (n[i] - x[i] - 1) * x[j] * (x[j] - 1)
+                          - x[i] * (n[i] - x[i]) * (n[j] - x[j]) * x[j]
+                          - (n[i] - x[i]) * x[i] * x[j] * (n[j] - x[j]))
+                    for i, j in indices]
+
+        out = self.branch_stats_vector(sample_sets, weight_fun=f, windows=windows)
+        # move this division outside of f(x) so it only has to happen once
+        for w in range(len(windows)-1):
+            for u in range(len(indices)):
+                out[w][u] /= float(n[indices[u][0]] * (n[indices[u][0]]-1)
+                                   * n[indices[u][1]] * (n[indices[u][1]] - 1))
+
+        return out
+
+    def f2(self, sample_sets, windows):
+        """
+        Finds the Patterson's f2 statistics between the three groups of samples
+        in sample_sets. The sample_sets should be disjoint (the computation works
+        fine, but if not the result depends on the amount of overlap).
+
+        f2(A;B) is f4(A,B;A,B) corrected to not include self comparisons.
+
+        :param list sample_sets: A list of *two* sets of IDs of samples: (A,B),
+            each having at least two samples.
+        :param iterable windows: The breakpoints of the windows (including start
+            and end, so has one more entry than number of windows).
+        :return: A list of values of f2(A,B) computed separately on each window.
+        """
+        if not len(sample_sets) == 2:
+            raise ValueError("sample_sets should be of length 2.")
+        return self.f2_vector(sample_sets, windows, indices=[(0, 1)])
+
+    def branch_stats(self, sample_sets, weight_fun):
         '''
-        Here leaf_sets is a list of lists of leaves, and weight_fun is a function
-        whose argument is a list of integers of the same length as leaf_sets
+        Here sample_sets is a list of lists of samples, and weight_fun is a function
+        whose argument is a list of integers of the same length as sample_sets
         that returns a boolean.  A branch in a tree is weighted by weight_fun(x),
-        where x[i] is the number of leaves in leaf_sets[i] below that
+        where x[i] is the number of samples in sample_sets[i] below that
         branch.  This finds the sum of all counted branches for each tree,
         and averages this across the tree sequence, weighted by genomic length.
         '''
-        out = self.branch_stats_vector(leaf_sets, lambda x: [weight_fun(x)])
+        out = self.branch_stats_vector(sample_sets, lambda x: [weight_fun(x)])
         assert len(out) == 1 and len(out[0]) == 1
         return out[0][0]
 
-    def branch_stats_windowed(self, leaf_sets, weight_fun, windows=None):
+    def branch_stats_windowed(self, sample_sets, weight_fun, windows=None):
         '''
-        Here leaf_sets is a list of lists of leaves, and weight_fun is a function
-        whose argument is a list of integers of the same length as leaf_sets
+        Here sample_sets is a list of lists of samples, and weight_fun is a function
+        whose argument is a list of integers of the same length as sample_sets
         that returns a boolean.  A branch in a tree is weighted by weight_fun(x),
-        where x[i] is the number of leaves in leaf_sets[i] below that
+        where x[i] is the number of samples in sample_sets[i] below that
         branch.  This finds the sum of all counted branches for each tree,
         and averages this across the tree sequence, weighted by genomic length.
         '''
-        out = self.branch_stats_vector(leaf_sets, lambda x: [weight_fun(x)], windows)
+        out = self.branch_stats_vector(sample_sets, lambda x: [weight_fun(x)], windows)
         assert len(out[0]) == 1
         return [x[0] for x in out]
 
-    def branch_stats_vector(self, leaf_sets, weight_fun, windows=None):
+    def branch_stats_vector(self, sample_sets, weight_fun, windows=None):
         '''
-        Here leaf_sets is a list of lists of leaves, and weight_fun is a function
-        whose argument is a list of integers of the same length as leaf_sets
+        Here sample_sets is a list of lists of samples, and weight_fun is a function
+        whose argument is a list of integers of the same length as sample_sets
         that returns a boolean.  A branch in a tree is weighted by weight_fun(x),
-        where x[i] is the number of leaves in leaf_sets[i] below that
+        where x[i] is the number of samples in sample_sets[i] below that
         branch.  This finds the sum of all counted branches for each tree,
         and averages this across the tree sequence, weighted by genomic length.
 
         It does this separately for each window [windows[i], windows[i+1])
-        and returns the values in a vector.
+        and returns the values in a list.
         '''
         if windows is None:
             windows = (0, self.sequence_length)
-        for U in leaf_sets:
+        for U in sample_sets:
             if len(U) != len(set(U)):
                 raise ValueError(
-                    "elements of leaf_sets cannot contain repeated elements.")
+                    "elements of sample_sets cannot contain repeated elements.")
+            for u in U:
+                if not self.node(u).is_sample():
+                    raise ValueError("Not all elements of sample_sets are samples.")
         num_windows = len(windows) - 1
         if windows[0] != 0.0:
             raise ValueError(
@@ -2307,14 +3105,14 @@ class TreeSequence(object):
             if windows[k + 1] <= windows[k]:
                 raise ValueError("Windows must be increasing.")
         # initialize
-        num_leaf_sets = len(leaf_sets)
-        n_out = len(weight_fun([0 for a in range(num_leaf_sets)]))
-        # print("leaf_sets:", leaf_sets)
-        # print("n_out:",n_out)
+        num_sample_sets = len(sample_sets)
+        n_out = len(weight_fun([0 for a in range(num_sample_sets)]))
         S = [[0.0 for j in range(n_out)] for _ in range(num_windows)]
         L = [0.0 for j in range(n_out)]
+        # print("sample_sets:", sample_sets)
+        # print("n_out:",n_out)
         N = self.num_nodes
-        X = [[int(u in a) for a in leaf_sets] for u in range(N)]
+        X = [[int(u in a) for a in sample_sets] for u in range(N)]
         # we will essentially construct the tree
         pi = [-1 for j in range(N)]
         node_time = [0.0 for u in range(N)]
@@ -2329,11 +3127,11 @@ class TreeSequence(object):
                     # print("\t",X, "-->", L)
                     if sign == +1:
                         node_time[node] = time
-                    dx = [0 for k in range(num_leaf_sets)]
+                    dx = [0 for k in range(num_sample_sets)]
                     for child in children:
                         if sign == +1:
                             pi[child] = node
-                        for k in range(num_leaf_sets):
+                        for k in range(num_sample_sets):
                             dx[k] += sign * X[child][k]
                         w = weight_fun(X[child])
                         dt = (node_time[pi[child]] - node_time[child])
@@ -2344,7 +3142,7 @@ class TreeSequence(object):
                         if sign == -1:
                             pi[child] = -1
                     old_w = weight_fun(X[node])
-                    for k in range(num_leaf_sets):
+                    for k in range(num_sample_sets):
                         X[node][k] += dx[k]
                     if pi[node] != -1:
                         w = weight_fun(X[node])
@@ -2359,7 +3157,7 @@ class TreeSequence(object):
                         next_u = pi[u]
                         while u != -1:
                             old_w = weight_fun(X[u])
-                            for k in range(num_leaf_sets):
+                            for k in range(num_sample_sets):
                                 X[u][k] += dx[k]
                             # need to update X for the root,
                             # but the root does not have a branch length
@@ -2488,6 +3286,21 @@ class TreeSequence(object):
             output.write(record)
 
     def simplify(self, samples=None, filter_root_mutations=True):
+        """
+        Returns a simplified tree sequence, that retains only the history of
+        the nodes given in the list ``samples''.  This will change the ID of
+        the nodes, so that the individual ``samples[k]]`` will have ID ``k`` in
+        the result.  In the resulting TreeSequence, the first ``len(samples)``
+        nodes will be marked as samples.
+
+        If you wish to convert a set of tables that do not satisfy all
+        requirements for building a TreeSequence, then use
+        ``simplify_tables()``.
+
+        :param list samples: The list of nodes for which to retain information.
+        :param bool filter_root_mutations: Whether to remove sites at which there
+            are no mutations.
+        """
         if samples is None:
             samples = self.get_samples()
         ll_ts = _msprime.TreeSequence()

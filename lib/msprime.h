@@ -43,8 +43,8 @@
 /* Flags for simplify() */
 #define MSP_FILTER_INVARIANT_SITES 1
 
-#define MSP_LEAF_COUNTS  1
-#define MSP_LEAF_LISTS   2
+#define MSP_SAMPLE_COUNTS  1
+#define MSP_SAMPLE_LISTS   2
 
 #define MSP_DIR_FORWARD 1
 #define MSP_DIR_REVERSE -1
@@ -479,10 +479,10 @@ typedef struct node_record {
     struct node_record *next;
 } node_record_t;
 
-typedef struct leaf_list_node {
+typedef struct _node_list {
     node_id_t node;
-    struct leaf_list_node *next;
-} leaf_list_node_t;
+    struct _node_list *next;
+} node_list_t;
 
 typedef struct {
     size_t sample_size;
@@ -514,19 +514,19 @@ typedef struct {
     node_id_t **children;
     double *time;
     size_t index;
-    /* These are involved in the optional leaf tracking; num_leaves counts
-     * all leaves below a give node, and num_tracked_leaves counts those
+    /* These are involved in the optional sample tracking; num_samples counts
+     * all samples below a give node, and num_tracked_samples counts those
      * from a specific subset. */
-    node_id_t *num_leaves;
-    node_id_t *num_tracked_leaves;
+    node_id_t *num_samples;
+    node_id_t *num_tracked_samples;
     /* All nodes that are marked during a particular transition are marked
      * with a given value. */
     uint8_t *marked;
     uint8_t mark;
-    /* These are for the optional leaf list tracking. */
-    leaf_list_node_t **leaf_list_head;
-    leaf_list_node_t **leaf_list_tail;
-    leaf_list_node_t *leaf_list_node_mem;
+    /* These are for the optional sample list tracking. */
+    node_list_t **sample_list_head;
+    node_list_t **sample_list_tail;
+    node_list_t *sample_list_node_mem;
     /* traversal stacks */
     node_id_t *stack1;
     node_id_t *stack2;
@@ -630,6 +630,70 @@ typedef struct {
     infinite_sites_mutation_t *mutations;
     object_heap_t avl_node_heap;
 } mutgen_t;
+
+
+/* For the simplify algorithm, we need specialised forms of ancestral
+ * segments, sites and mutations */
+typedef struct _simplify_segment_t {
+    double left;
+    double right;
+    struct _simplify_segment_t *next;
+    node_id_t node;
+} simplify_segment_t;
+
+typedef struct _simplify_mutation_t {
+    double position;
+    site_id_t site_id;
+    node_id_t node;
+    char *derived_state;
+    list_len_t derived_state_length;
+    struct _simplify_mutation_t *next;
+} simplify_mutation_t;
+
+typedef struct {
+    double position;
+    char *ancestral_state;
+    list_len_t ancestral_state_length;
+    simplify_mutation_t *mutations;
+} simplify_site_t;
+
+typedef struct {
+    node_id_t *samples;
+    size_t num_samples;
+    int flags;
+    double sequence_length;
+    /* Keep a copy of the input nodes simplify mapping */
+    node_table_t input_nodes;
+    size_t *node_name_offset;
+    size_t num_input_sites;
+    /* Keep a copy of the input edgesets for simplicity. We cannot modify the
+     * edgeset table in place because we may have more output edgesets than input.
+     */
+    edgeset_table_t input_edgesets;
+    /* Input/output tables. */
+    node_table_t *nodes;
+    edgeset_table_t *edgesets;
+    site_table_t *sites;
+    mutation_table_t *mutations;
+    /* State for topology */
+    simplify_segment_t **ancestor_map;
+    simplify_segment_t **root_map;
+    node_id_t *node_id_map;
+    avl_tree_t merge_queue;
+    object_heap_t segment_heap;
+    object_heap_t avl_node_heap;
+    size_t children_buffer_size;
+    node_id_t *children_buffer;
+    size_t segment_buffer_size;
+    simplify_segment_t **segment_buffer;
+    edgeset_t last_edgeset;
+    /* State for sites/mutations */
+    avl_tree_t *mutation_map;
+    simplify_mutation_t *mutation_mem;
+    simplify_site_t *output_sites;
+    char *ancestral_state_mem;
+    char *derived_state_mem;
+} simplifier_t;
 
 int msp_alloc(msp_t *self, size_t sample_size, sample_t *samples, gsl_rng *rng);
 int msp_set_simulation_model_non_parametric(msp_t *self, int model);
@@ -766,23 +830,24 @@ int sparse_tree_alloc(sparse_tree_t *self, tree_sequence_t *tree_sequence,
 int sparse_tree_free(sparse_tree_t *self);
 int sparse_tree_copy(sparse_tree_t *self, sparse_tree_t *source);
 int sparse_tree_equal(sparse_tree_t *self, sparse_tree_t *other);
-int sparse_tree_set_tracked_leaves(sparse_tree_t *self,
-        size_t num_tracked_leaves, node_id_t *tracked_leaves);
-int sparse_tree_set_tracked_leaves_from_leaf_list(sparse_tree_t *self,
-        leaf_list_node_t *head, leaf_list_node_t *tail);
+int sparse_tree_set_tracked_samples(sparse_tree_t *self,
+        size_t num_tracked_samples, node_id_t *tracked_samples);
+int sparse_tree_set_tracked_samples_from_sample_list(sparse_tree_t *self,
+        node_list_t *head, node_list_t *tail);
 int sparse_tree_get_root(sparse_tree_t *self, node_id_t *root);
+bool sparse_tree_is_sample(sparse_tree_t *self, node_id_t u);
 int sparse_tree_get_parent(sparse_tree_t *self, node_id_t u, node_id_t *parent);
 int sparse_tree_get_children(sparse_tree_t *self, node_id_t u,
         size_t *num_children, node_id_t **children);
 int sparse_tree_get_time(sparse_tree_t *self, node_id_t u, double *t);
 int sparse_tree_get_mrca(sparse_tree_t *self, node_id_t u, node_id_t v,
         node_id_t *mrca);
-int sparse_tree_get_num_leaves(sparse_tree_t *self, node_id_t u,
-        size_t *num_leaves);
-int sparse_tree_get_num_tracked_leaves(sparse_tree_t *self, node_id_t u,
-        size_t *num_tracked_leaves);
-int sparse_tree_get_leaf_list(sparse_tree_t *self, node_id_t u,
-        leaf_list_node_t **head, leaf_list_node_t **tail);
+int sparse_tree_get_num_samples(sparse_tree_t *self, node_id_t u,
+        size_t *num_samples);
+int sparse_tree_get_num_tracked_samples(sparse_tree_t *self, node_id_t u,
+        size_t *num_tracked_samples);
+int sparse_tree_get_sample_list(sparse_tree_t *self, node_id_t u,
+        node_list_t **head, node_list_t **tail);
 int sparse_tree_get_sites(sparse_tree_t *self, site_t **sites, list_len_t *sites_length);
 void sparse_tree_print_state(sparse_tree_t *self, FILE *out);
 /* Method for positioning the tree in the sequence. */
@@ -851,11 +916,17 @@ int mutgen_populate_tables(mutgen_t *self, site_table_t *sites,
         mutation_table_t *mutations);
 void mutgen_print_state(mutgen_t *self, FILE *out);
 
+/* Tables API */
+int sort_tables(node_table_t *nodes, edgeset_table_t *edgesets, migration_table_t *migrations,
+        site_table_t *sites, mutation_table_t *mutations);
+
 int node_table_alloc(node_table_t *self, size_t max_rows_increment,
         size_t max_total_name_length_increment);
 int node_table_add_row(node_table_t *self, uint32_t flags, double time,
         population_id_t population, const char *name);
 int node_table_set_columns(node_table_t *self, size_t num_rows, uint32_t *flags, double *time,
+        population_id_t *population, char *name, list_len_t *name_length);
+int node_table_append_columns(node_table_t *self, size_t num_rows, uint32_t *flags, double *time,
         population_id_t *population, char *name, list_len_t *name_length);
 int node_table_reset(node_table_t *self);
 int node_table_free(node_table_t *self);
@@ -868,6 +939,9 @@ int edgeset_table_add_row(edgeset_table_t *self, double left, double right,
 int edgeset_table_set_columns(edgeset_table_t *self, size_t num_rows, double *left,
         double *right, node_id_t *parent, node_id_t *children,
         list_len_t *children_length);
+int edgeset_table_append_columns(edgeset_table_t *self, size_t num_rows, double *left,
+        double *right, node_id_t *parent, node_id_t *children,
+        list_len_t *children_length);
 int edgeset_table_reset(edgeset_table_t *self);
 int edgeset_table_free(edgeset_table_t *self);
 void edgeset_table_print_state(edgeset_table_t *self, FILE *out);
@@ -877,6 +951,8 @@ int site_table_alloc(site_table_t *self, size_t max_rows_increment,
 int site_table_add_row(site_table_t *self, double position, const char *ancestral_state,
         list_len_t ancestral_state_length);
 int site_table_set_columns(site_table_t *self, size_t num_rows,
+        double *position, const char *ancestral_state, list_len_t *ancestral_state_length);
+int site_table_append_columns(site_table_t *self, size_t num_rows,
         double *position, const char *ancestral_state, list_len_t *ancestral_state_length);
 bool site_table_equal(site_table_t *self, site_table_t *other);
 int site_table_reset(site_table_t *self);
@@ -891,6 +967,9 @@ int mutation_table_add_row(mutation_table_t *self, site_id_t site, node_id_t nod
 int mutation_table_set_columns(mutation_table_t *self, size_t num_rows,
         site_id_t *site, node_id_t *node, const char *derived_state,
         list_len_t *derived_state_length);
+int mutation_table_append_columns(mutation_table_t *self, size_t num_rows,
+        site_id_t *site, node_id_t *node, const char *derived_state,
+        list_len_t *derived_state_length);
 bool mutation_table_equal(mutation_table_t *self, mutation_table_t *other);
 int mutation_table_reset(mutation_table_t *self);
 int mutation_table_free(mutation_table_t *self);
@@ -902,9 +981,20 @@ int migration_table_add_row(migration_table_t *self, double left, double right,
 int migration_table_set_columns(migration_table_t *self, size_t num_rows,
         double *left, double *right, node_id_t *node, population_id_t *source,
         population_id_t *dest, double *time);
+int migration_table_append_columns(migration_table_t *self, size_t num_rows,
+        double *left, double *right, node_id_t *node, population_id_t *source,
+        population_id_t *dest, double *time);
 int migration_table_reset(migration_table_t *self);
 int migration_table_free(migration_table_t *self);
 void migration_table_print_state(migration_table_t *self, FILE *out);
+
+int simplifier_alloc(simplifier_t *self,
+        node_id_t *samples, size_t num_samples,
+        node_table_t *nodes, edgeset_table_t *edgesets, migration_table_t *migrations,
+        site_table_t *sites, mutation_table_t *mutations, int flags);
+int simplifier_free(simplifier_t *self);
+int simplifier_run(simplifier_t *self);
+void simplifier_print_state(simplifier_t *self, FILE *out);
 
 const char * msp_strerror(int err);
 void __msp_safe_free(void **ptr);
