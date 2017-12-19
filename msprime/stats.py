@@ -160,7 +160,7 @@ class LdCalculator(object):
 class GeneralStatCalculator(object):
     """
     A common class for BranchLengthStatCalculator and SiteStatCalculator -- those
-    implemment different `tree_stat_vector()` methods, but given that
+    implement different `tree_stat_vector()` methods, but given that
     general-purpose function, many statistics are computed in the same way.
 
     .. warning::

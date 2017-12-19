@@ -29,6 +29,8 @@ import math
 import random
 import sys
 
+import numpy as np
+
 import _msprime
 import msprime.tables as tables
 import msprime.trees as trees
@@ -629,6 +631,14 @@ class RecombinationMap(object):
     @classmethod
     def uniform_map(cls, length, rate, num_loci=None):
         return cls([0, length], [rate, 0], num_loci)
+
+    @classmethod
+    def uniform_map_with_jitter(cls, length, lower_rate, upper_rate, seed=None):
+        if seed is not None:
+            rng = np.random.RandomState(seed)
+            return cls(list(range(0,length+1)), list(rng.uniform(lower_rate, upper_rate, length))+[0], length)
+        else:
+            return cls(list(range(0,length+1)), list(np.random.uniform(lower_rate, upper_rate, length))+[0], length)
 
     @classmethod
     def read_hapmap(cls, filename):
