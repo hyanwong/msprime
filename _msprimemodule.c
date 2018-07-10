@@ -1221,6 +1221,32 @@ out:
     return ret;
 }
 
+static PyObject *
+IndividualTable_truncate(IndividualTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (IndividualTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = individual_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
 
 static PyObject *
 IndividualTable_get_max_rows_increment(IndividualTable *self, void *closure)
@@ -1359,6 +1385,8 @@ static PyMethodDef IndividualTable_methods[] = {
         "Copies the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) IndividualTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) IndividualTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -1694,6 +1722,33 @@ out:
 }
 
 static PyObject *
+NodeTable_truncate(NodeTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (NodeTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = node_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 NodeTable_get_max_rows_increment(NodeTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -1844,6 +1899,8 @@ static PyMethodDef NodeTable_methods[] = {
         "Copies the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) NodeTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) NodeTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -2121,6 +2178,33 @@ out:
 }
 
 static PyObject *
+EdgeTable_truncate(EdgeTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (EdgeTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = edge_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 EdgeTable_get_max_rows_increment(EdgeTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -2244,6 +2328,8 @@ static PyMethodDef EdgeTable_methods[] = {
         "Copies the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) EdgeTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) EdgeTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -2536,6 +2622,33 @@ out:
 }
 
 static PyObject *
+MigrationTable_truncate(MigrationTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (MigrationTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = migration_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 MigrationTable_get_max_rows_increment(MigrationTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -2684,6 +2797,8 @@ static PyMethodDef MigrationTable_methods[] = {
         "Appends the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) MigrationTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) MigrationTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -3005,6 +3120,32 @@ out:
     return ret;
 }
 
+static PyObject *
+SiteTable_truncate(SiteTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (SiteTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = site_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
 
 static PyObject *
 SiteTable_get_max_rows_increment(SiteTable *self, void *closure)
@@ -3153,6 +3294,8 @@ static PyMethodDef SiteTable_methods[] = {
         "Appends the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) SiteTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) SiteTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -3505,6 +3648,33 @@ out:
 }
 
 static PyObject *
+MutationTable_truncate(MutationTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (MutationTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = mutation_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 MutationTable_get_max_rows_increment(MutationTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -3682,6 +3852,8 @@ static PyMethodDef MutationTable_methods[] = {
         "Appends the data in the specified  arrays into the columns."},
     {"clear", (PyCFunction) MutationTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) MutationTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -3960,6 +4132,33 @@ out:
 }
 
 static PyObject *
+PopulationTable_truncate(PopulationTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (PopulationTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = population_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 PopulationTable_get_max_rows_increment(PopulationTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -4050,6 +4249,8 @@ static PyMethodDef PopulationTable_methods[] = {
         "Copies the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) PopulationTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) PopulationTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -4351,6 +4552,33 @@ out:
 }
 
 static PyObject *
+ProvenanceTable_truncate(ProvenanceTable *self, PyObject *args)
+{
+    PyObject *ret = NULL;
+    Py_ssize_t num_rows;
+    int err;
+
+    if (ProvenanceTable_check_state(self) != 0) {
+        goto out;
+    }
+    if (!PyArg_ParseTuple(args, "n", &num_rows)) {
+        goto out;
+    }
+    if (num_rows < 0 || num_rows > (Py_ssize_t) self->table->num_rows) {
+        PyErr_SetString(PyExc_ValueError, "num_rows out of bounds");
+        goto out;
+    }
+    err = provenance_table_truncate(self->table, (size_t) num_rows);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("");
+out:
+    return ret;
+}
+
+static PyObject *
 ProvenanceTable_get_max_rows_increment(ProvenanceTable *self, void *closure)
 {
     PyObject *ret = NULL;
@@ -4472,6 +4700,8 @@ static PyMethodDef ProvenanceTable_methods[] = {
         "Copies the data in the specified arrays into the columns."},
     {"clear", (PyCFunction) ProvenanceTable_clear, METH_NOARGS,
         "Clears this table."},
+    {"truncate", (PyCFunction) ProvenanceTable_truncate, METH_VARARGS,
+        "Truncates this table to the specified number of rows."},
     {NULL}  /* Sentinel */
 };
 
@@ -5466,19 +5696,14 @@ TreeSequence_dump(TreeSequence *self, PyObject *args, PyObject *kwds)
     int err;
     char *path;
     PyObject *ret = NULL;
-    int zlib_compression = 0;
     int flags = 0;
-    static char *kwlist[] = {"path", "zlib_compression", NULL};
+    static char *kwlist[] = {"path", NULL};
 
     if (TreeSequence_check_tree_sequence(self) != 0) {
         goto out;
     }
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|i", kwlist,
-                &path, &zlib_compression)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &path)) {
         goto out;
-    }
-    if (zlib_compression) {
-        flags = MSP_DUMP_ZLIB_COMPRESSION;
     }
     err = tree_sequence_dump(self->tree_sequence, path, flags);
     if (err != 0) {
@@ -6284,7 +6509,7 @@ SparseTree_init(SparseTree *self, PyObject *args, PyObject *kwds)
     num_nodes = tree_sequence_get_num_nodes(tree_sequence->tree_sequence);
     num_tracked_samples = 0;
     if (py_tracked_samples != NULL) {
-        if (!flags & MSP_SAMPLE_COUNTS) {
+        if (!(flags & MSP_SAMPLE_COUNTS)) {
             PyErr_SetString(PyExc_ValueError,
                 "Cannot specified tracked_samples without count_samples flag");
             goto out;

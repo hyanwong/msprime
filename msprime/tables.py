@@ -129,13 +129,49 @@ class BaseTable(object):
         # Deprecated alias for clear
         self.clear()
 
+    def truncate(self, num_rows):
+        """
+        Truncates this table so that the only the first ``num_rows`` are retained.
+
+        :param int num_rows: The number of rows to retain in this table.
+        """
+        return self.ll_table.truncate(num_rows)
+
     # Unpickle support
     def __setstate__(self, state):
         self.set_columns(**state)
 
 
 class IndividualTable(BaseTable):
-    # FIXME Document
+    """
+    A table defining the individuals in a tree sequence. See the
+    :ref:`definitions <sec_individual_table_definition>` for details on the columns
+    in this table and the
+    :ref:`tree sequence requirements <sec_valid_tree_sequence_requirements>` section
+    for the properties needed for an individual table to be a part of a valid tree
+    sequence.
+
+    :warning: The numpy arrays returned by table attribute accesses are **copies**
+        of the underlying data. In particular, this means that you cannot edit
+        the values in the columns by updating the attribute arrays.
+
+        **NOTE:** this behaviour may change in future.
+
+    :ivar flags: The array of flags values.
+    :vartype flags: numpy.ndarray, dtype=np.uint32
+    :ivar location: The flattened array of floating point location values. See
+        :ref:`sec_encoding_ragged_columns` for more details.
+    :vartype location: numpy.ndarray, dtype=np.float64
+    :ivar location_offset: The array of offsets into the location column. See
+        :ref:`sec_encoding_ragged_columns` for more details.
+    :vartype location_offset: numpy.ndarray, dtype=np.uint32
+    :ivar metadata: The flattened array of binary metadata values. See
+        :ref:`sec_tables_api_binary_columns` for more details.
+    :vartype metadata: numpy.ndarray, dtype=np.int8
+    :ivar metadata_offset: The array of offsets into the metadata column. See
+        :ref:`sec_tables_api_binary_columns` for more details.
+    :vartype metadata_offset: numpy.ndarray, dtype=np.uint32
+    """
     def __init__(self, max_rows_increment=0, ll_table=None):
         if ll_table is None:
             ll_table = _msprime.IndividualTable(max_rows_increment=max_rows_increment)
@@ -186,13 +222,52 @@ class IndividualTable(BaseTable):
         return copy
 
     def add_row(self, flags=0, location=None, metadata=None):
-        return self.ll_table.add_row(
-                flags=flags, location=location, metadata=metadata)
+        """
+        Adds a new row to this :class:`IndividualTable` and returns the ID of the
+        corresponding individual.
+
+        :param int flags: The bitwise flags for the new node.
+        :param array-like location: A list of numeric values or one-dimensional numpy
+            array describing the location of this individual. If not specified
+            or None, a zero-dimensional location is stored.
+        :param bytes metadata: The binary-encoded metadata for the new node. If not
+            specified or None, a zero-length byte string is stored.
+        :return: The ID of the newly added node.
+        :rtype: int
+        """
+        return self.ll_table.add_row(flags=flags, location=location, metadata=metadata)
 
     def set_columns(
             self, flags, location=None, location_offset=None,
             metadata=None, metadata_offset=None):
-        # FIXME
+        """
+        Sets the values for each column in this :class:`.IndividualTable` using the
+        values in the specified arrays. Overwrites any data currently stored in
+        the table.
+
+        The ``flags`` array is mandatory and defines the number of individuals
+        the table will contain.
+        The ``location`` and ``location_offset`` parameters must be supplied
+        together, and meet the requirements for :ref:`sec_encoding_ragged_columns`.
+        The ``metadata`` and ``metadata_offset`` parameters must be supplied
+        together, and meet the requirements for :ref:`sec_encoding_ragged_columns`.
+        See :ref:`sec_tables_api_binary_columns` for more information.
+
+        :param flags: The bitwise flags for each node. Required.
+        :type flags: numpy.ndarray, dtype=np.uint32
+        :param location: The flattened location array. Must be specified along
+            with ``location_offset``. If not specified or None, an empty location
+            value is stored for each node.
+        :type location: numpy.ndarray, dtype=np.float64
+        :param location_offset: The offsets into the ``location`` array.
+        :type location_offset: numpy.ndarray, dtype=np.uint32.
+        :param metadata: The flattened metadata array. Must be specified along
+            with ``metadata_offset``. If not specified or None, an empty metadata
+            value is stored for each node.
+        :type metadata: numpy.ndarray, dtype=np.int8
+        :param metadata_offset: The offsets into the ``metadata`` array.
+        :type metadata_offset: numpy.ndarray, dtype=np.uint32.
+        """
         self.ll_table.set_columns(
             flags, location=location, location_offset=location_offset,
             metadata=metadata, metadata_offset=metadata_offset)
@@ -200,7 +275,33 @@ class IndividualTable(BaseTable):
     def append_columns(
             self, flags, location=None, location_offset=None, metadata=None,
             metadata_offset=None):
-        # FIXME
+        """
+        Appends the specified arrays to the end of the columns in this
+        :class:`IndividualTable`. This allows many new rows to be added at once.
+
+        The ``flags`` array is mandatory and defines the number of
+        extra individuals to add to the table.
+        The ``location`` and ``location_offset`` parameters must be supplied
+        together, and meet the requirements for :ref:`sec_encoding_ragged_columns`.
+        The ``metadata`` and ``metadata_offset`` parameters must be supplied
+        together, and meet the requirements for :ref:`sec_encoding_ragged_columns`.
+        See :ref:`sec_tables_api_binary_columns` for more information.
+
+        :param flags: The bitwise flags for each node. Required.
+        :type flags: numpy.ndarray, dtype=np.uint32
+        :param location: The flattened location array. Must be specified along
+            with ``location_offset``. If not specified or None, an empty location
+            value is stored for each node.
+        :type location: numpy.ndarray, dtype=np.float64
+        :param location_offset: The offsets into the ``location`` array.
+        :type location_offset: numpy.ndarray, dtype=np.uint32.
+        :param metadata: The flattened metadata array. Must be specified along
+            with ``metadata_offset``. If not specified or None, an empty metadata
+            value is stored for each node.
+        :type metadata: numpy.ndarray, dtype=np.int8
+        :param metadata_offset: The offsets into the ``metadata`` array.
+        :type metadata_offset: numpy.ndarray, dtype=np.uint32.
+        """
         self.ll_table.append_columns(
             flags, location=location, location_offset=location_offset,
             metadata=metadata, metadata_offset=metadata_offset)
@@ -1105,15 +1206,14 @@ class PopulationTable(BaseTable):
         """
         .. todo:: document.
         """
-        if metadata is None:
-            metadata = datetime.datetime.now().isoformat()
         return self.ll_table.add_row(metadata=metadata)
 
     def __str__(self):
-        metadata = unpack_strings(self.metadata, self.metadata_offset)
+        metadata = unpack_bytes(self.metadata, self.metadata_offset)
         ret = "id\tmetadata\n"
         for j in range(self.num_rows):
-            ret += "{}\t{}\n".format(j, metadata[j])
+            md = base64.b64encode(metadata[j]).decode('utf8')
+            ret += "{}\t{}\n".format(j, md)
         return ret[:-1]
 
     def copy(self):
@@ -1256,7 +1356,36 @@ copyreg.pickle(ProvenanceTable, _provenance_table_pickle)
 
 
 class TableCollection(object):
-    # TODO document.
+    """
+    A collection of mutable tables defining a tree sequence. See the
+    :ref:`sec_data_model` section for definition on the various tables
+    and how they together define a :class:`TreeSequence`. Arbitrary
+    data can be stored in a TableCollection, but there are certain
+    :ref:`requirements <sec_valid_tree_sequence_requirements>` that must be
+    satisfied for these tables to be interpreted as a tree sequence.
+
+    To obtain a :class:`TreeSequence` instance corresponding to the current
+    state of a ``TableCollection``, please use the :meth:`.tree_sequence`
+    method.
+
+    :ivar individuals: The individual table.
+    :vartype individuals: IndividualTable
+    :ivar edges: The edge table.
+    :vartype edges: EdgeTable
+    :ivar migrations: The migration table.
+    :vartype migrations: MigrationTable
+    :ivar sites: The site table.
+    :vartype sites: SiteTable
+    :ivar mutations: The mutation table.
+    :vartype mutations: MutationTable
+    :ivar populations: The population table.
+    :vartype populations: PopulationTable
+    :ivar provenances: The provenance table.
+    :vartype provenances: ProvenanceTable
+    :ivar sequence_length: The sequence length defining the coordinate
+        space.
+    :vartype sequence_length: float
+    """
     def __init__(self, sequence_length=0, ll_tables=None):
         if ll_tables is None:
             ll_tables = _msprime.TableCollection(
@@ -1469,6 +1598,8 @@ def sort_tables(
         nodes, edges, migrations=None, sites=None, mutations=None,
         provenances=None, individuals=None, populations=None, edge_start=0):
     """
+    **This function is deprecated. Please use TableCollection.sort() instead**
+
     Sorts the given tables **in place**, ensuring that all tree
     sequence ordering requirements are met. See
     the :ref:`sec_valid_tree_sequence_requirements` section for details on these
@@ -1524,6 +1655,9 @@ def sort_tables(
         sites = SiteTable()
     if mutations is None:
         mutations = MutationTable()
+    sequence_length = 0
+    if len(edges) > 0:
+        sequence_length = edges.right.max()
     try:
         ll_tables = _msprime.TableCollection(
             individuals=_msprime.IndividualTable(),
@@ -1533,7 +1667,8 @@ def sort_tables(
             sites=sites.ll_table,
             mutations=mutations.ll_table,
             populations=_msprime.PopulationTable(),
-            provenances=_msprime.ProvenanceTable())
+            provenances=_msprime.ProvenanceTable(),
+            sequence_length=sequence_length)
     except AttributeError as e:
         raise TypeError(str(e))
     return ll_tables.sort(edge_start)
@@ -1543,6 +1678,8 @@ def simplify_tables(
         samples, nodes, edges, migrations=None, sites=None, mutations=None,
         sequence_length=0, filter_zero_mutation_sites=True):
     """
+    **This function is deprecated. Please use TableCollection.simplify() instead**
+
     Simplifies the tables, **in place**, to retain only the information necessary
     to reconstruct the tree sequence describing the given ``samples``.  This
     will change the ID of the nodes, so that the individual ``samples[k]]``
@@ -1581,6 +1718,8 @@ def simplify_tables(
         sites = SiteTable()
     if mutations is None:
         mutations = MutationTable()
+    if sequence_length == 0 and len(edges) > 0:
+        sequence_length = edges.right.max()
     try:
         ll_tables = _msprime.TableCollection(
             individuals=_msprime.IndividualTable(),

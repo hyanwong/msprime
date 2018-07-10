@@ -404,12 +404,26 @@ out:
     return ret;
 }
 
-int
+int WARN_UNUSED
 node_table_clear(node_table_t *self)
 {
-    self->num_rows = 0;
-    self->metadata_length = 0;
-    return 0;
+    return node_table_truncate(self, 0);
+}
+
+int
+node_table_truncate(node_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+    self->metadata_length = self->metadata_offset[n];
+out:
+    return ret;
 }
 
 int
@@ -660,8 +674,22 @@ out:
 int
 edge_table_clear(edge_table_t *self)
 {
-    self->num_rows = 0;
-    return 0;
+    return edge_table_truncate(self, 0);
+}
+
+int
+edge_table_truncate(edge_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+out:
+    return ret;
 }
 
 int
@@ -1033,12 +1061,23 @@ site_table_equals(site_table_t *self, site_table_t *other)
 int
 site_table_clear(site_table_t *self)
 {
-    self->num_rows = 0;
-    self->ancestral_state_length = 0;
-    self->ancestral_state_offset[0] = 0;
-    self->metadata_length = 0;
-    self->metadata_offset[0] = 0;
-    return 0;
+    return site_table_truncate(self, 0);
+}
+
+int
+site_table_truncate(site_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+    self->ancestral_state_length = self->ancestral_state_offset[n];
+    self->metadata_length = self->metadata_offset[n];
+out:
+    return ret;
 }
 
 int
@@ -1447,12 +1486,24 @@ mutation_table_equals(mutation_table_t *self, mutation_table_t *other)
 int
 mutation_table_clear(mutation_table_t *self)
 {
-    self->num_rows = 0;
-    self->derived_state_length = 0;
-    self->derived_state_offset[0] = 0;
-    self->metadata_length = 0;
-    self->metadata_offset[0] = 0;
-    return 0;
+    return mutation_table_truncate(self, 0);
+}
+
+int
+mutation_table_truncate(mutation_table_t *mutations, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > mutations->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    mutations->num_rows = n;
+    mutations->derived_state_length = mutations->derived_state_offset[n];
+    mutations->metadata_length = mutations->metadata_offset[n];
+out:
+    return ret;
 }
 
 int
@@ -1706,8 +1757,22 @@ out:
 int
 migration_table_clear(migration_table_t *self)
 {
-    self->num_rows = 0;
-    return 0;
+    return migration_table_truncate(self, 0);
+}
+
+int
+migration_table_truncate(migration_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+out:
+    return ret;
 }
 
 int
@@ -2066,10 +2131,23 @@ out:
 int
 individual_table_clear(individual_table_t *self)
 {
+    return individual_table_truncate(self, 0);
+}
+
+int
+individual_table_truncate(individual_table_t *self, size_t num_rows)
+{
     int ret = 0;
-    self->num_rows = 0;
-    self->metadata_length = 0;
-    self->location_length = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+    self->location_length = self->location_offset[n];
+    self->metadata_length = self->metadata_offset[n];
+out:
     return ret;
 }
 
@@ -2390,9 +2468,23 @@ out:
 int
 population_table_clear(population_table_t *self)
 {
-    self->num_rows = 0;
-    self->metadata_length = 0;
-    return 0;
+    return population_table_truncate(self, 0);
+}
+
+int
+population_table_truncate(population_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+    self->metadata_length = self->metadata_offset[n];
+out:
+    return ret;
 }
 
 int
@@ -2736,10 +2828,24 @@ out:
 int
 provenance_table_clear(provenance_table_t *self)
 {
-    self->num_rows = 0;
-    self->timestamp_length = 0;
-    self->record_length = 0;
-    return 0;
+    return provenance_table_truncate(self, 0);
+}
+
+int
+provenance_table_truncate(provenance_table_t *self, size_t num_rows)
+{
+    int ret = 0;
+    table_size_t n = (table_size_t) num_rows;
+
+    if (n > self->num_rows) {
+        ret = MSP_ERR_BAD_TABLE_POSITION;
+        goto out;
+    }
+    self->num_rows = n;
+    self->timestamp_length = self->timestamp_offset[n];
+    self->record_length = self->record_offset[n];
+out:
+    return ret;
 }
 
 int
@@ -3629,8 +3735,11 @@ simplifier_check_input(simplifier_t *self)
             goto out;
         }
         if (j > 0) {
-            if (self->sites->position[j - 1] >= self->sites->position[j]) {
+            if (self->sites->position[j - 1] > self->sites->position[j]) {
                 ret = MSP_ERR_UNSORTED_SITES;
+                goto out;
+            } else if (self->sites->position[j - 1] == self->sites->position[j]) {
+                ret = MSP_ERR_DUPLICATE_SITE_POSITION;
                 goto out;
             }
         }
@@ -3723,15 +3832,13 @@ simplifier_alloc(simplifier_t *self, node_id_t *samples, size_t num_samples,
         table_collection_t *tables, int flags)
 {
     int ret = 0;
-    size_t j, num_nodes_alloc;
-    double sequence_length;
+    size_t num_nodes_alloc;
 
+    memset(self, 0, sizeof(simplifier_t));
     if (samples == NULL || tables == NULL) {
         ret = MSP_ERR_BAD_PARAM_VALUE;
         goto out;
     }
-
-    memset(self, 0, sizeof(simplifier_t));
     self->num_samples = num_samples;
     self->flags = flags;
     self->nodes = tables->nodes;
@@ -3741,21 +3848,12 @@ simplifier_alloc(simplifier_t *self, node_id_t *samples, size_t num_samples,
     self->individuals = tables->individuals;
     self->populations = tables->populations;
     self->provenances = tables->provenances;
+    self->sequence_length = tables->sequence_length;
 
-    /* TODO is this the correct semantics now? */
-    sequence_length = tables->sequence_length;
-    if (sequence_length == 0) {
-        /* infer sequence length from the edges */
-        sequence_length = 0.0;
-        for (j = 0; j < tables->edges->num_rows; j++) {
-            sequence_length = MSP_MAX(sequence_length, tables->edges->right[j]);
-        }
-        if (sequence_length <= 0.0) {
-            ret = MSP_ERR_BAD_SEQUENCE_LENGTH;
-            goto out;
-        }
+    if (self->sequence_length <= 0.0) {
+        ret = MSP_ERR_BAD_SEQUENCE_LENGTH;
+        goto out;
     }
-    self->sequence_length = sequence_length;
     /* Take a copy of the input samples */
     self->samples = malloc(num_samples * sizeof(node_id_t));
     if (self->samples == NULL) {
@@ -3881,7 +3979,15 @@ simplifier_alloc(simplifier_t *self, node_id_t *samples, size_t num_samples,
     if (ret != 0) {
         goto out;
     }
-    /* simplifier_print_state(self, stdout); */
+
+    /* Temporary workaround to make sure that we don't ship code with
+     * incorrect semantics in terms of individuals. Put this check in
+     * last so we catch other errors first, and so we don't need
+     * to change other tests.  */
+    if (tables->individuals->num_rows != 0) {
+        ret = MSP_ERR_INDIVIDUALS_NOT_SUPPORTED;
+        goto out;
+    }
 out:
     return ret;
 }
@@ -5032,6 +5138,8 @@ table_collection_simplify(table_collection_t *self,
     if (ret != 0) {
         goto out;
     }
+    /* The indexes are invalidated now so drop them */
+    ret = table_collection_drop_indexes(self);
 out:
     simplifier_free(&simplifier);
     return ret;
@@ -5048,6 +5156,11 @@ table_collection_sort(table_collection_t *self, size_t edge_start, int flags)
         goto out;
     }
     ret = table_sorter_run(&sorter, edge_start);
+    if (ret != 0) {
+        goto out;
+    }
+    /* The indexes are invalidated now so drop them */
+    ret = table_collection_drop_indexes(self);
 out:
     table_sorter_free(&sorter);
     return ret;
@@ -5197,8 +5310,10 @@ table_collection_compute_mutation_parents(table_collection_t *self, int MSP_UNUS
     /* Using unsigned values here avoids potentially undefined behaviour */
     uint32_t j, mutation, first_mutation;
 
-    /* TODO the loops below will break if sequence length is 0. */
-    assert(self->sequence_length > 0 && self->edges->num_rows > 0);
+    if (self->sequence_length <= 0 && self->edges->num_rows > 0) {
+        ret = MSP_ERR_BAD_PARAM_VALUE;
+        goto out;
+    }
     ret = table_collection_build_indexes(self, 0);
     if (ret != 0) {
         goto out;
@@ -5316,5 +5431,70 @@ table_collection_compute_mutation_parents(table_collection_t *self, int MSP_UNUS
 out:
     msp_safe_free(parent);
     msp_safe_free(bottom_mutation);
+    return ret;
+}
+
+/* Record the current "end" position of a table collection,
+ * which is the current number of rows in each table.
+ */
+int
+table_collection_record_position(table_collection_t *self,
+        table_collection_position_t *position)
+{
+    position->individuals = self->individuals->num_rows;
+    position->nodes = self->nodes->num_rows;
+    position->edges = self->edges->num_rows;
+    position->migrations = self->migrations->num_rows;
+    position->sites = self->sites->num_rows;
+    position->mutations = self->mutations->num_rows;
+    position->populations = self->populations->num_rows;
+    position->provenances = self->provenances->num_rows;
+    return 0;
+}
+
+/* Reset to the previously recorded position. */
+int WARN_UNUSED
+table_collection_reset_position(table_collection_t *tables,
+        table_collection_position_t *position)
+{
+    int ret = 0;
+
+    ret = table_collection_drop_indexes(tables);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = individual_table_truncate(tables->individuals, position->individuals);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = node_table_truncate(tables->nodes, position->nodes);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = edge_table_truncate(tables->edges, position->edges);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = migration_table_truncate(tables->migrations, position->migrations);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = site_table_truncate(tables->sites, position->sites);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = mutation_table_truncate(tables->mutations, position->mutations);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = population_table_truncate(tables->populations, position->populations);
+    if (ret != 0) {
+        goto out;
+    }
+    ret = provenance_table_truncate(tables->provenances, position->provenances);
+    if (ret != 0) {
+        goto out;
+    }
+out:
     return ret;
 }
