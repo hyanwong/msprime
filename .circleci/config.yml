@@ -29,19 +29,20 @@ jobs:
           name: Compile
           command: |
             CFLAGS=--coverage python setup.py build_ext --inplace
+            make -C lib/tskit
             make -C lib debian-tests
       - run:
           name: Run highlevel tests and upload coverage
           command: |
-            flake8 --max-line-length 89 setup.py msprime tests
+            flake8 --max-line-length 89 setup.py msprime tskit tests tskit_tests verification.py algorithms.py
             nosetests -v --with-coverage --cover-package msprime \
-              --cover-branches --cover-erase --cover-xml --cover-inclusive tests
+              --cover-branches --cover-erase --cover-xml --cover-inclusive tests tskit_tests
             codecov -X gcov -F python
             rm .coverage
       - run:
           name: Run the low-level tests.
           command: |
-            ./lib/tests
+            # ./lib/tests
             ./lib/simulation_tests
       - run:
           name: Run gcov manually, as the one used in codecov doesn't work here.

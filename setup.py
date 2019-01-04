@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2015-2017 University of Oxford
+# Copyright (C) 2015-2018 University of Oxford
 #
 # This file is part of msprime.
 #
@@ -23,10 +23,11 @@ import subprocess
 import platform
 import os
 import os.path
+import sys
 from warnings import warn
 
 from setuptools import setup, Extension
-from setuptools.command.build_ext import build_ext as _build_ext
+from setuptools.command.build_ext import build_ext
 
 
 CONDA_PREFIX = os.getenv("MSP_CONDA_PREFIX", None)
@@ -69,32 +70,39 @@ class PathConfigurator(object):
 
 
 # Obscure magic required to allow numpy be used as an 'setup_requires'.
-class build_ext(_build_ext):
+# Based on https://stackoverflow.com/questions/19919905
+class local_build_ext(build_ext):
     def finalize_options(self):
-        super(build_ext, self).finalize_options()
+        build_ext.finalize_options(self)
+        if sys.version_info[0] >= 3:
+            import builtins
+        else:
+            import __builtin__ as builtins
         # Prevent numpy from thinking it is still in its setup process:
-        __builtins__.__NUMPY_SETUP__ = False
+        builtins.__NUMPY_SETUP__ = False
         import numpy
         self.include_dirs.append(numpy.get_include())
+        import kastore
+        self.include_dirs.append(kastore.get_include())
 
 
-# The above obscure magic doesn't seem to work on py2 and prevents the
-# extension from building at all, so here's a nasty workaround:
 libdir = "lib"
-includes = [libdir]
-try:
-    import numpy
-    includes.append(numpy.get_include())
-except ImportError:
-    pass
+includes = [libdir, libdir + "/tskit"]
 
-kastore_dir = os.path.join("kastore", "c")
 configurator = PathConfigurator()
-source_files = [
-    "msprime.c", "fenwick.c", "avl.c", "tree_sequence.c",
-    "object_heap.c", "newick.c", "hapgen.c", "recomb_map.c", "mutgen.c",
-    "vargen.c", "vcf.c", "ld.c", "tables.c", "util.c", "uuid.c",
-    os.path.join(kastore_dir, "kastore.c")]
+msp_source_files = [
+    "msprime.c", "fenwick.c", "avl.c", "util.c",
+    "object_heap.c", "recomb_map.c", "mutgen.c"
+]
+tsk_source_files = [
+    # TODO this will be removed once we move the tskit code out.
+    "tskit/tsk_core.c",
+    "tskit/tsk_tables.c",
+    "tskit/tsk_trees.c",
+    "tskit/tsk_genotypes.c",
+    "tskit/tsk_stats.c",
+    "tskit/tsk_convert.c",
+]
 
 
 # Now, setup the extension module. We have to do some quirky workarounds
@@ -116,6 +124,10 @@ class DefineMacros(object):
 
         defines = [
             # Define the library version
+            # TODO: this is only used for the VCF converter to get the right version
+            # in the header. We'll need something smarter in the future.
+            ("TSK_LIBRARY_VERSION_STR", '{}'.format(self._msprime_version)),
+            # Keeping this for now for compiling the C module.
             ("MSP_LIBRARY_VERSION_STR", '{}'.format(self._msprime_version)),
         ]
         if IS_WINDOWS:
@@ -123,6 +135,7 @@ class DefineMacros(object):
                 # These two are required for GSL to compile and link against the
                 # conda-forge version.
                 ("GSL_DLL", None), ("WIN32", None)]
+        defines += [("KAS_DYNAMIC_API", None)]
         return defines[index]
 
 
@@ -133,16 +146,31 @@ if IS_WINDOWS:
 
 _msprime_module = Extension(
     '_msprime',
-    sources=["_msprimemodule.c"] + [os.path.join(libdir, f) for f in source_files],
+    sources=["_msprimemodule.c"] + [
+        os.path.join(libdir, f) for f in msp_source_files + tsk_source_files],
     # Enable asserts by default.
     undef_macros=["NDEBUG"],
     extra_compile_args=["-std=c99"],
     libraries=libraries,
     define_macros=DefineMacros(),
-    include_dirs=includes + [
-        os.path.join(libdir, kastore_dir)] + configurator.include_dirs,
+    include_dirs=includes + configurator.include_dirs,
     library_dirs=configurator.library_dirs,
 )
+
+_tskit_module = Extension(
+    '_tskit',
+    sources=["_tskitmodule.c"] + [os.path.join(libdir, f) for f in tsk_source_files],
+    # Enable asserts by default.
+    undef_macros=["NDEBUG"],
+    extra_compile_args=["-std=c99"],
+    libraries=libraries,
+    define_macros=DefineMacros(),
+    include_dirs=includes + configurator.include_dirs,
+    library_dirs=configurator.library_dirs,
+)
+
+numpy_ver = "numpy>=1.7"
+kastore_ver = "kastore>=0.2.2"
 
 with open("README.rst") as f:
     long_description = f.read()
@@ -151,7 +179,7 @@ setup(
     name="msprime",
     description="A fast and accurate coalescent simulator.",
     long_description=long_description,
-    packages=["msprime"],
+    packages=["msprime", "tskit"],
     author="Jerome Kelleher",
     author_email="jerome.kelleher@well.ox.ac.uk",
     url="http://pypi.python.org/pypi/msprime",
@@ -161,8 +189,9 @@ setup(
             'msp=msprime.cli:msp_main',
         ]
     },
-    install_requires=["numpy>=1.7.0", "h5py", "svgwrite", "six"],
-    ext_modules=[_msprime_module],
+    include_package_data=True,
+    install_requires=[numpy_ver, kastore_ver, "h5py", "svgwrite", "six", "jsonschema"],
+    ext_modules=[_msprime_module, _tskit_module],
     keywords=["Coalescent simulation", "ms"],
     license="GNU GPLv3+",
     platforms=["POSIX", "Windows", "MacOS X"],
@@ -186,6 +215,7 @@ setup(
         "Topic :: Scientific/Engineering",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
     ],
-    setup_requires=['numpy', 'setuptools_scm'],
+    setup_requires=[numpy_ver, kastore_ver, 'setuptools_scm'],
     use_scm_version={"write_to": "msprime/_version.py"},
+    cmdclass={"build_ext": local_build_ext},
 )

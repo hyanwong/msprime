@@ -26,8 +26,6 @@
 #include <assert.h>
 
 #include "util.h"
-#include "kastore.h"
-
 
 static const char *
 msp_strerror_internal(int err)
@@ -63,7 +61,7 @@ msp_strerror_internal(int err)
             ret = "Links Overflow occurred.";
             break;
         case MSP_ERR_OUT_OF_BOUNDS:
-            ret = "Array index out of bounds";
+            ret = "Object reference out of bounds";
             break;
         case MSP_ERR_BAD_ORDERING:
             ret = "Bad record ordering requested";
@@ -83,8 +81,8 @@ msp_strerror_internal(int err)
         case MSP_ERR_BAD_POPULATION_SIZE:
             ret = "Bad population size provided. Must be > 0.";
             break;
-        case MSP_ERR_BAD_POPULATION_ID:
-            ret = "Bad population id provided.";
+        case MSP_ERR_POPULATION_OUT_OF_BOUNDS:
+            ret = "Population ID out of bounds.";
             break;
         case MSP_ERR_BAD_MIGRATION_MATRIX:
             ret = "Bad migration matrix provided.";
@@ -119,9 +117,6 @@ msp_strerror_internal(int err)
             break;
         case MSP_ERR_EDGES_NONCONTIGUOUS_PARENTS:
             ret = "All edges for a given parent must be contiguous";
-            break;
-        case MSP_ERR_NODES_NONCONTIGUOUS_INDIVIDUALS:
-            ret = "All nodes for a given individual must be contiguous";
             break;
         case MSP_ERR_EDGES_NOT_SORTED_CHILD:
             ret = "Edges must be listed in (time[parent], child, left) order;"
@@ -226,6 +221,9 @@ msp_strerror_internal(int err)
         case MSP_ERR_BAD_SEQUENCE_LENGTH:
             ret = "Sequence length must be > 0.";
             break;
+        case MSP_ERR_LEFT_LESS_ZERO:
+            ret = "Left coordinate must be >= 0";
+            break;
         case MSP_ERR_RIGHT_GREATER_SEQ_LENGTH:
             ret = "Right coordinate > sequence length.";
             break;
@@ -247,8 +245,8 @@ msp_strerror_internal(int err)
         case MSP_ERR_TOO_MANY_ALLELES:
             ret = "Cannot have more than 255 alleles.";
             break;
-        case MSP_ERR_BAD_INDIVIDUAL:
-            ret = "Individual ID not in individual table.";
+        case MSP_ERR_INDIVIDUAL_OUT_OF_BOUNDS:
+            ret = "Individual ID out of bounds";
             break;
         case MSP_ERR_GENERATE_UUID:
             ret = "Error generating UUID";
@@ -256,13 +254,64 @@ msp_strerror_internal(int err)
         case MSP_ERR_DUPLICATE_SITE_POSITION:
             ret = "Duplicate site positions.";
             break;
-        case MSP_ERR_INDIVIDUALS_NOT_SUPPORTED:
-            /* Temporary error to flag a limitation in current implementation. */
-            ret = "Individuals are currently not supported in simplify.";
-            break;
         case MSP_ERR_BAD_TABLE_POSITION:
             ret = "Bad table position provided to truncate/reset.";
             break;
+        case MSP_ERR_BAD_EDGE_INDEX:
+            ret = "Invalid edge index value.";
+            break;
+        case MSP_ERR_TABLES_NOT_INDEXED:
+            ret = "Table collection must be indexed.";
+            break;
+        case MSP_ERR_SIMPLIFY_MIGRATIONS_NOT_SUPPORTED:
+            ret = "Migrations currently not supported in simplify. Please open an "
+                "issue on GitHub if this operation is important to you.";
+            break;
+        case MSP_ERR_INCOMPATIBLE_FROM_TS:
+            ret = "The specified tree sequence is not a compatible starting point "
+                "for the current simulation";
+            break;
+        case MSP_ERR_BAD_START_TIME_FROM_TS:
+            ret = "The specified start_time and from_ts are not compatible. All "
+                "node times in the tree sequence must be <= start_time.";
+            break;
+        case MSP_ERR_BAD_START_TIME:
+            ret = "start_time must be >= 0.";
+            break;
+        case MSP_ERR_BAD_DEMOGRAPHIC_EVENT_TIME:
+            ret = "demographic event time must be >= start_time.";
+            break;
+        case MSP_ERR_RECOMB_MAP_TOO_COARSE:
+            ret = "The specified recombination map is cannot translate the coordinates"
+                "for the specified tree sequence. It is either too coarse (num_loci "
+                "is too small) or contains zero recombination rates. Please either "
+                "increase the number of loci or recombination rate";
+            break;
+        case MSP_ERR_TIME_TRAVEL:
+            ret = "The simulation model supplied resulted in a parent node having "
+                "a time value <= to its child. This can occur either as a result "
+                "of multiple bottlenecks happening at the same time or because of "
+                "numerical imprecision with very small population sizes.";
+            break;
+        case MSP_ERR_ONLY_INFINITE_SITES:
+            ret = "Only infinite sites mutations are supported for this operation.";
+            break;
+        case MSP_ERR_INTEGRATION_FAILED:
+            ret = "GSL numerical integration failed. Please check the stderr for details.";
+            break;
+        case MSP_ERR_BAD_SWEEP_LOCUS:
+            ret = "Sweep locus must be between 0 and num_loci.";
+            break;
+        case MSP_ERR_BAD_TRAJECTORY_TIME:
+            ret = "Time values must be > 0 and in increasing order.";
+            break;
+        case MSP_ERR_BAD_TRAJECTORY_ALLELE_FREQUENCY:
+            ret = "Allele frequency values must be between 0 and 1.";
+            break;
+        case MSP_ERR_EMPTY_TRAJECTORY:
+            ret = "Trajectory must contain at least one time point.";
+            break;
+
         case MSP_ERR_IO:
             if (errno != 0) {
                 ret = strerror(errno);
@@ -279,29 +328,10 @@ out:
     return ret;
 }
 
-
-int
-msp_set_kas_error(int err)
-{
-    /* Flip this bit. As the error is negative, this sets the bit to 0 */
-    return err ^ (1 << MSP_KAS_ERR_BIT);
-}
-
-bool
-msp_is_kas_error(int err)
-{
-    return !(err & (1 << MSP_KAS_ERR_BIT));
-}
-
 const char *
 msp_strerror(int err)
 {
-    if (msp_is_kas_error(err)) {
-        err ^= (1 << MSP_KAS_ERR_BIT);
-        return kas_strerror(err);
-    } else {
-        return msp_strerror_internal(err);
-    }
+    return msp_strerror_internal(err);
 }
 
 void
@@ -311,107 +341,5 @@ __msp_safe_free(void **ptr) {
             free(*ptr);
             *ptr = NULL;
         }
-    }
-}
-
-/* Block allocator. Simple allocator when we lots of chunks of memory
- * and don't need to free them individually.
- */
-
-void
-block_allocator_print_state(block_allocator_t *self, FILE *out)
-{
-    fprintf(out, "Block allocator%p::\n", (void *) self);
-    fprintf(out, "\ttop = %d\n", (int) self->top);
-    fprintf(out, "\tchunk_size = %d\n", (int) self->chunk_size);
-    fprintf(out, "\tnum_chunks = %d\n", (int) self->num_chunks);
-    fprintf(out, "\ttotal_allocated = %d\n", (int) self->total_allocated);
-    fprintf(out, "\ttotal_size = %d\n", (int) self->total_size);
-}
-
-int WARN_UNUSED
-block_allocator_reset(block_allocator_t *self)
-{
-    int ret = 0;
-
-    self->top = 0;
-    self->current_chunk = 0;
-    self->total_allocated = 0;
-    return ret;
-}
-
-int WARN_UNUSED
-block_allocator_alloc(block_allocator_t *self, size_t chunk_size)
-{
-    int ret = 0;
-
-    assert(chunk_size > 0);
-    memset(self, 0, sizeof(block_allocator_t));
-    self->chunk_size = chunk_size;
-    self->top = 0;
-    self->current_chunk = 0;
-    self->total_allocated = 0;
-    self->total_size = 0;
-    self->num_chunks = 0;
-    self->mem_chunks = malloc(sizeof(char *));
-    if (self->mem_chunks == NULL) {
-        ret = MSP_ERR_NO_MEMORY;
-        goto out;
-    }
-    self->mem_chunks[0] = malloc(chunk_size);
-    if (self->mem_chunks[0] == NULL) {
-        ret = MSP_ERR_NO_MEMORY;
-        goto out;
-    }
-    self->num_chunks = 1;
-    self->total_size = chunk_size + sizeof(void *);
-out:
-    return ret;
-}
-
-void * WARN_UNUSED
-block_allocator_get(block_allocator_t *self, size_t size)
-{
-    void *ret = NULL;
-    void *p;
-
-    assert(size < self->chunk_size);
-    if ((self->top + size) > self->chunk_size) {
-        if (self->current_chunk == (self->num_chunks - 1)) {
-            p = realloc(self->mem_chunks, (self->num_chunks + 1) * sizeof(void *));
-            if (p == NULL) {
-                goto out;
-            }
-            self->mem_chunks = p;
-            p = malloc(self->chunk_size);
-            if (p == NULL) {
-                goto out;
-            }
-            self->mem_chunks[self->num_chunks] = p;
-            self->num_chunks++;
-            self->total_size += self->chunk_size + sizeof(void *);
-        }
-        self->current_chunk++;
-        self->top = 0;
-    }
-    ret = self->mem_chunks[self->current_chunk] + self->top;
-    self->top += size;
-    self->total_allocated += size;
-out:
-    return ret;
-}
-
-void
-block_allocator_free(block_allocator_t *self)
-{
-    size_t j;
-
-    for (j = 0; j < self->num_chunks; j++) {
-        if (self->mem_chunks[j] != NULL) {
-            free(self->mem_chunks[j]);
-        }
-    }
-    if (self->mem_chunks != NULL) {
-        free(self->mem_chunks);
     }
 }

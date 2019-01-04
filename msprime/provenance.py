@@ -25,6 +25,7 @@ from __future__ import division
 
 import platform
 
+
 import _msprime
 
 __version__ = "undefined"
@@ -35,18 +36,17 @@ except ImportError:
     pass
 
 
-_gsl_version = _msprime.get_gsl_version()
+_environment = None
+
+# TODO hook into tskit's provenance somehow
 
 
-def get_environment():
-    """
-    Returns a dictionary describing the environment in which msprime
-    is currently running.
-    """
+def _get_environment():
+    gsl_version = ".".join(map(str, _msprime.get_gsl_version()))
     env = {
         "libraries": {
             "gsl": {
-                "version": _gsl_version
+                "version": gsl_version
             },
             "kastore": {
                 # Hard coding this for now as there is no way to get version
@@ -54,7 +54,7 @@ def get_environment():
                 # https://github.com/tskit-dev/kastore/issues/41
                 # We could import the kastore module here and use its version,
                 # but this is not the same as the C code we have compiler against.
-                "version": (0, 1, 0)
+                "version": "0.1.0",
             }
         },
         "os": {
@@ -66,23 +66,7 @@ def get_environment():
         },
         "python": {
             "implementation": platform.python_implementation(),
-            "version": platform.python_version_tuple(),
+            "version": platform.python_version(),
         }
     }
     return env
-
-
-def get_provenance_dict(command, parameters=None):
-    """
-    Returns a dictionary encoding an execution of msprime.
-
-    Note: this format is incomplete and provisional.
-    """
-    document = {
-        "software": "msprime",
-        "version": __version__,
-        "command": command,
-        "parameters": parameters,
-        "environment": get_environment()
-    }
-    return document

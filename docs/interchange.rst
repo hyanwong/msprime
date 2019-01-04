@@ -4,7 +4,7 @@
 Tree sequence interchange
 #########################
 
-The correlated genealogical trees that describe the shared ancestry of set of
+The correlated genealogical trees that describe the shared ancestry of a set of
 samples are stored concisely in ``msprime`` as a collection of
 easy-to-understand tables. These are output by coalescent simulation in
 ``msprime`` or can be read in from another source. This page documents
@@ -29,8 +29,9 @@ To begin, here are definitions of some key ideas encountered later.
 
 tree
     A "gene tree", i.e., the genealogical tree describing how a collection of
-    genomes (usually at the tips of the tree) are related to each other.
-    See :ref:`sec_nodes_or_individuals` for discussion of what a "genome" is.
+    genomes (usually at the tips of the tree) are related to each other at some
+    chromosomal location. See :ref:`sec_nodes_or_individuals` for discussion
+    of what a "genome" is.
 
 tree sequence
     A "succinct tree sequence" (or tree sequence, for brevity) is an efficient
@@ -85,7 +86,7 @@ mutation
     where it occurs within the tree at this position), and a derived state
     (which defines the mutational state inherited by all nodes in the subtree
     rooted at the focal node). In more complex situations in which we have
-    back or recurrent mutations, a mutation must also specify it's 'parent'
+    back or recurrent mutations, a mutation must also specify its 'parent'
     mutation.
 
 migration
@@ -123,7 +124,7 @@ A tree sequence can be stored in a collection of eight tables:
 :ref:`Provenance <sec_provenance_table_definition>`.
 The Node and Edge tables store the genealogical
 relationships that define the trees, and the Individual table
-describes how multiple chromosomes are grouped within individuals;
+describes how multiple genomes are grouped within individuals;
 the Site and Mutation tables describe where mutations fall
 on the trees; the Migration table describes how lineages move across space;
 and the Provenance table contains information on where the data came from.
@@ -136,16 +137,15 @@ more detail.
 
 .. _sec_nodes_or_individuals:
 
-*******************************
 Nodes, Genomes, or Individuals?
-*******************************
+===============================
 
 The natural unit of biological analysis is (usually) the *individual*. However,
 many organisms we study are diploid, and so each individual contains *two*
 homologous copies of the entire genome, separately inherited from the two
 parental individuals. Since each monoploid copy of the genome is inherited separately,
 each diploid individual lies at the end of two distinct lineages, and so will
-be represented by *two* places in any genealogical tree. This makes it
+be represented by *two* places in any given genealogical tree. This makes it
 difficult to precisely discuss tree sequences for diploids, as we have no
 simple way to refer to the bundle of chromosomes that make up the "copy of the
 genome inherited from one particular parent". For this reason, in this
@@ -154,7 +154,7 @@ documentation we use the non-descriptive term "node" to refer to this concept
 term "genome" at times, for concreteness.
 
 Several properties naturally associated with individuals are in fact assigned
-to nodes in what follows: birth time and population. This is for two reasons: 
+to nodes in what follows: birth time and population. This is for two reasons:
 First, since coalescent simulations naturally lack a notion of polyploidy, earlier
 versions of ``msprime`` lacked the notion of an individual. Second, ancestral
 nodes are not naturally grouped together into individuals -- we know they must have
@@ -165,8 +165,14 @@ even though their birth times might be inferred.
 
 .. _sec_table_definitions:
 
+*****************
 Table definitions
-=================
+*****************
+
+.. _sec_table_types_definitions:
+
+Table types
+===========
 
 .. _sec_node_table_definition:
 
@@ -210,6 +216,12 @@ is ``IS_SAMPLE = 1``, which defines the *sample* status of nodes. Marking
 a particular node as a "sample" means, for example, that the mutational state
 of the node will be included in the genotypes produced by
 :meth:`.TreeSequence.variants`.
+
+Bits 0-15 (inclusive) of the ``flags`` column are reserved for internal use by
+``tskit`` and should not be used by applications for anything other
+than the purposes documented here. Bits 16-31 (inclusive) are free for applications
+to use for any purpose and will not be altered or interpreteted by
+``tskit``.
 
 See the :ref:`sec_node_requirements` section for details on the properties
 required for a valid set of nodes.
@@ -255,6 +267,12 @@ required for a valid set of individuals.
 The ``flags`` column stores information about a particular individual, and
 is composed of 32 bitwise boolean values. Currently, no flags are
 defined.
+
+Bits 0-15 (inclusive) of the ``flags`` column are reserved for internal use by
+``tskit`` and should not be used by applications for anything other
+than the purposes documented here. Bits 16-31 (inclusive) are free for applications
+to use for any purpose and will not be altered or interpreteted by
+``tskit``.
 
 The ``location`` column stores the location of an individual in arbitrary
 dimensions. This column is :ref:`ragged <sec_encoding_ragged_columns>`, and
@@ -679,7 +697,7 @@ There are no requirements on a population table.
 Provenance requirements
 -----------------------
 
-The `timestamp` column of a provenance table should be in 
+The `timestamp` column of a provenance table should be in
 `ISO-8601 <https://en.wikipedia.org/wiki/ISO_8601>`_ format.
 
 The `record` should be valid JSON with structure defined in the Provenance
@@ -763,7 +781,7 @@ If each edge had at most only a single mutation, then the ``parent`` property
 of the mutation table would be easily inferred from the tree at that mutation's
 site. If mutations are entered into the mutation table ordered by time of
 appearance, then this sortedness allows us to infer the parent of each mutation
-even for mutations occurring on the same branch. The 
+even for mutations occurring on the same branch. The
 :meth:`TableCollection.compute_mutation_parents` method will take advantage
 of this fact to compute the ``parent`` column of a mutation table, if all
 other information is valid.
@@ -858,6 +876,36 @@ node 1, first from A to T, then a back mutation to A. The genotypes of our two
 samples, nodes 0 and 1, are therefore AA and ATA.
 
 
+.. _sec_individual_text_format:
+
+Individual text format
+======================
+
+The individual text format must contain a ``flags`` column.
+Optionally, there may also be a ``location`` and
+``metadata`` columns. See the :ref:`individual table definitions
+<sec_individual_table_definition>` for details on these columns.
+
+Note that there are currently no globally defined ``flags``, but the column
+is still required; a value of ``0`` means that there are no flags set.
+
+The ``location`` column should be a sequence of comma-separated numeric
+values. They do not all have to be the same length.
+
+An example individual table::
+
+    flags   location
+    0           0.5,1.2
+    0           1.0,3.4
+    0
+    0           1.2
+    0           3.5,6.3
+    0           0.5,0.5
+    0           0.5
+    0           0.7,0.6,0.0
+    0           0.5,0.0
+
+
 .. _sec_node_text_format:
 
 Node text format
@@ -937,6 +985,23 @@ mutations::
     1      1       A                1
 
 
+
+Population text format
+======================
+
+Population tables only have a ``metadata`` column, so the text format for
+a population table requires there to be a ``metadata`` column. See the
+:ref:`population table definitions <sec_population_table_definition>` for
+details.
+
+An example population table::
+
+    id   metadata
+    0    cG9wMQ==
+    1    cG9wMg==
+
+The ``metadata`` contains base64-encoded data (in this case, the strings
+``pop1`` and ``pop1``).
 
 
 .. _sec_binary_interchange:

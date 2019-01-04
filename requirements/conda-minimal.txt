@@ -3,3 +3,5 @@ nose
 h5py
 gsl
 six
+jsonschema
+svgwrite
