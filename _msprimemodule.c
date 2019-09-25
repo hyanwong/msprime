@@ -29,19 +29,7 @@
 #include <gsl/gsl_math.h>
 #include <gsl/gsl_errno.h>
 
-/* Need this for now until we can compile against a tskit dynamic API. */
-#include <kastore.h>
-kas_funcptr *kas_dynamic_api;
-
 #include "msprime.h"
-
-#if PY_MAJOR_VERSION >= 3
-#define IS_PY3K
-#endif
-
-#define MODULE_DOC \
-"Low level interface for msprime"
-
 
 /* We keep a reference to the gsl_error_handler so it can be restored if needed */
 static gsl_error_handler_t *old_gsl_error_handler;
@@ -57,7 +45,7 @@ static PyObject *MsprimeLibraryError;
  */
 typedef struct {
     PyObject_HEAD
-    tsk_tbl_collection_t *tables;
+    tsk_table_collection_t *tables;
 } LightweightTableCollection;
 
 typedef struct {
@@ -279,8 +267,8 @@ make_edge(tsk_edge_t *edge)
 static PyObject *
 make_migration(tsk_migration_t *r)
 {
-    int source = r->source == TSK_NULL_POPULATION ? -1: r->source;
-    int dest = r->dest == TSK_NULL_POPULATION ? -1: r->dest;
+    int source = r->source == TSK_NULL ? -1: r->source;
+    int dest = r->dest == TSK_NULL ? -1: r->dest;
     PyObject *ret = NULL;
 
     ret = Py_BuildValue("ddiiid",
@@ -366,14 +354,14 @@ table_read_offset_array(PyObject *input, size_t *num_rows, size_t length, bool c
     }
     shape = PyArray_DIMS(array);
     if (! check_num_rows) {
-        *num_rows = shape[0];
+        *num_rows = (size_t) shape[0];
         if (*num_rows == 0) {
             PyErr_SetString(PyExc_ValueError, "Offset arrays must have at least one element");
             goto out;
         }
         *num_rows -= 1;
     }
-    if (shape[0] != *num_rows + 1) {
+    if (((size_t) shape[0]) != *num_rows + 1) {
         PyErr_SetString(PyExc_ValueError, "offset columns must have n + 1 rows.");
         goto out;
     }
@@ -391,7 +379,7 @@ out:
 }
 
 static int
-parse_individual_table_dict(tsk_individual_tbl_t *table, PyObject *dict, bool clear_table)
+parse_individual_table_dict(tsk_individual_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -478,13 +466,13 @@ parse_individual_table_dict(tsk_individual_tbl_t *table, PyObject *dict, bool cl
     }
 
     if (clear_table) {
-        err = tsk_individual_tbl_clear(table);
+        err = tsk_individual_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_individual_tbl_append_columns(table, num_rows,
+    err = tsk_individual_table_append_columns(table, num_rows,
             PyArray_DATA(flags_array),
             location_data, location_offset_data,
             metadata_data, metadata_offset_data);
@@ -503,7 +491,7 @@ out:
 }
 
 static int
-parse_node_table_dict(tsk_node_tbl_t *table, PyObject *dict, bool clear_table)
+parse_node_table_dict(tsk_node_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -596,13 +584,13 @@ parse_node_table_dict(tsk_node_tbl_t *table, PyObject *dict, bool clear_table)
         metadata_offset_data = PyArray_DATA(metadata_offset_array);
     }
     if (clear_table) {
-        err = tsk_node_tbl_clear(table);
+        err = tsk_node_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_node_tbl_append_columns(table, num_rows,
+    err = tsk_node_table_append_columns(table, num_rows,
             PyArray_DATA(flags_array), PyArray_DATA(time_array), population_data,
             individual_data, metadata_data, metadata_offset_data);
     if (err != 0) {
@@ -621,7 +609,7 @@ out:
 }
 
 static int
-parse_edge_table_dict(tsk_edge_tbl_t *table, PyObject *dict, bool clear_table)
+parse_edge_table_dict(tsk_edge_table_t *table, PyObject *dict, bool clear_table)
 {
     int ret = -1;
     int err;
@@ -672,13 +660,13 @@ parse_edge_table_dict(tsk_edge_tbl_t *table, PyObject *dict, bool clear_table)
     }
 
     if (clear_table) {
-        err = tsk_edge_tbl_clear(table);
+        err = tsk_edge_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_edge_tbl_append_columns(table, num_rows,
+    err = tsk_edge_table_append_columns(table, num_rows,
             PyArray_DATA(left_array), PyArray_DATA(right_array),
             PyArray_DATA(parent_array), PyArray_DATA(child_array));
     if (err != 0) {
@@ -695,7 +683,7 @@ out:
 }
 
 static int
-parse_migration_table_dict(tsk_migration_tbl_t *table, PyObject *dict, bool clear_table)
+parse_migration_table_dict(tsk_migration_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -766,13 +754,13 @@ parse_migration_table_dict(tsk_migration_tbl_t *table, PyObject *dict, bool clea
     }
 
     if (clear_table) {
-        err = tsk_migration_tbl_clear(table);
+        err = tsk_migration_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_migration_tbl_append_columns(table, num_rows,
+    err = tsk_migration_table_append_columns(table, num_rows,
         PyArray_DATA(left_array), PyArray_DATA(right_array), PyArray_DATA(node_array),
         PyArray_DATA(source_array), PyArray_DATA(dest_array), PyArray_DATA(time_array));
     if (err != 0) {
@@ -791,7 +779,7 @@ out:
 }
 
 static int
-parse_site_table_dict(tsk_site_tbl_t *table, PyObject *dict, bool clear_table)
+parse_site_table_dict(tsk_site_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -871,13 +859,13 @@ parse_site_table_dict(tsk_site_tbl_t *table, PyObject *dict, bool clear_table)
     }
 
     if (clear_table) {
-        err = tsk_site_tbl_clear(table);
+        err = tsk_site_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_site_tbl_append_columns(table, num_rows,
+    err = tsk_site_table_append_columns(table, num_rows,
         PyArray_DATA(position_array), PyArray_DATA(ancestral_state_array),
         PyArray_DATA(ancestral_state_offset_array), metadata_data, metadata_offset_data);
     if (err != 0) {
@@ -895,7 +883,7 @@ out:
 }
 
 static int
-parse_mutation_table_dict(tsk_mutation_tbl_t *table, PyObject *dict, bool clear_table)
+parse_mutation_table_dict(tsk_mutation_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -1002,13 +990,13 @@ parse_mutation_table_dict(tsk_mutation_tbl_t *table, PyObject *dict, bool clear_
     }
 
     if (clear_table) {
-        err = tsk_mutation_tbl_clear(table);
+        err = tsk_mutation_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_mutation_tbl_append_columns(table, num_rows,
+    err = tsk_mutation_table_append_columns(table, num_rows,
             PyArray_DATA(site_array), PyArray_DATA(node_array),
             parent_data, PyArray_DATA(derived_state_array),
             PyArray_DATA(derived_state_offset_array),
@@ -1030,7 +1018,7 @@ out:
 }
 
 static int
-parse_population_table_dict(tsk_population_tbl_t *table, PyObject *dict, bool clear_table)
+parse_population_table_dict(tsk_population_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -1063,13 +1051,13 @@ parse_population_table_dict(tsk_population_tbl_t *table, PyObject *dict, bool cl
     }
 
     if (clear_table) {
-        err = tsk_population_tbl_clear(table);
+        err = tsk_population_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_population_tbl_append_columns(table, num_rows,
+    err = tsk_population_table_append_columns(table, num_rows,
             PyArray_DATA(metadata_array), PyArray_DATA(metadata_offset_array));
     if (err != 0) {
         handle_library_error(err);
@@ -1083,7 +1071,7 @@ out:
 }
 
 static int
-parse_provenance_table_dict(tsk_provenance_tbl_t *table, PyObject *dict, bool clear_table)
+parse_provenance_table_dict(tsk_provenance_table_t *table, PyObject *dict, bool clear_table)
 {
     int err;
     int ret = -1;
@@ -1137,13 +1125,13 @@ parse_provenance_table_dict(tsk_provenance_tbl_t *table, PyObject *dict, bool cl
     }
 
     if (clear_table) {
-        err = tsk_provenance_tbl_clear(table);
+        err = tsk_provenance_table_clear(table);
         if (err != 0) {
             handle_library_error(err);
             goto out;
         }
     }
-    err = tsk_provenance_tbl_append_columns(table, num_rows,
+    err = tsk_provenance_table_append_columns(table, num_rows,
             PyArray_DATA(timestamp_array), PyArray_DATA(timestamp_offset_array),
             PyArray_DATA(record_array), PyArray_DATA(record_offset_array));
     if (err != 0) {
@@ -1160,7 +1148,7 @@ out:
 }
 
 static int
-parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
+parse_table_collection_dict(tsk_table_collection_t *tables, PyObject *tables_dict)
 {
     int ret = -1;
     PyObject *value = NULL;
@@ -1184,7 +1172,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_individual_table_dict(tables->individuals, value, true) != 0) {
+    if (parse_individual_table_dict(&tables->individuals, value, true) != 0) {
         goto out;
     }
 
@@ -1197,7 +1185,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_node_table_dict(tables->nodes, value, true) != 0) {
+    if (parse_node_table_dict(&tables->nodes, value, true) != 0) {
         goto out;
     }
 
@@ -1210,7 +1198,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_edge_table_dict(tables->edges, value, true) != 0) {
+    if (parse_edge_table_dict(&tables->edges, value, true) != 0) {
         goto out;
     }
 
@@ -1223,7 +1211,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_migration_table_dict(tables->migrations, value, true) != 0) {
+    if (parse_migration_table_dict(&tables->migrations, value, true) != 0) {
         goto out;
     }
 
@@ -1236,7 +1224,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_site_table_dict(tables->sites, value, true) != 0) {
+    if (parse_site_table_dict(&tables->sites, value, true) != 0) {
         goto out;
     }
 
@@ -1249,7 +1237,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_mutation_table_dict(tables->mutations, value, true) != 0) {
+    if (parse_mutation_table_dict(&tables->mutations, value, true) != 0) {
         goto out;
     }
 
@@ -1262,7 +1250,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_population_table_dict(tables->populations, value, true) != 0) {
+    if (parse_population_table_dict(&tables->populations, value, true) != 0) {
         goto out;
     }
 
@@ -1275,7 +1263,7 @@ parse_table_collection_dict(tsk_tbl_collection_t *tables, PyObject *tables_dict)
         PyErr_SetString(PyExc_TypeError, "not a dictionary");
         goto out;
     }
-    if (parse_provenance_table_dict(tables->provenances, value, true) != 0) {
+    if (parse_provenance_table_dict(&tables->provenances, value, true) != 0) {
         goto out;
     }
 
@@ -1285,7 +1273,7 @@ out:
 }
 
 static int
-write_table_arrays(tsk_tbl_collection_t *tables, PyObject *dict)
+write_table_arrays(tsk_table_collection_t *tables, PyObject *dict)
 {
     struct table_col {
         const char *name;
@@ -1305,117 +1293,117 @@ write_table_arrays(tsk_tbl_collection_t *tables, PyObject *dict)
 
     struct table_col individual_cols[] = {
         {"flags",
-            (void *) tables->individuals->flags, tables->individuals->num_rows, NPY_UINT32},
+            (void *) tables->individuals.flags, tables->individuals.num_rows, NPY_UINT32},
         {"location",
-            (void *) tables->individuals->location, tables->individuals->location_length,
+            (void *) tables->individuals.location, tables->individuals.location_length,
             NPY_FLOAT64},
         {"location_offset",
-            (void *) tables->individuals->location_offset, tables->individuals->num_rows + 1,
+            (void *) tables->individuals.location_offset, tables->individuals.num_rows + 1,
             NPY_UINT32},
         {"metadata",
-            (void *) tables->individuals->metadata, tables->individuals->metadata_length,
+            (void *) tables->individuals.metadata, tables->individuals.metadata_length,
             NPY_INT8},
         {"metadata_offset",
-            (void *) tables->individuals->metadata_offset, tables->individuals->num_rows + 1,
+            (void *) tables->individuals.metadata_offset, tables->individuals.num_rows + 1,
             NPY_UINT32},
         {NULL},
     };
 
     struct table_col node_cols[] = {
         {"time",
-            (void *) tables->nodes->time, tables->nodes->num_rows, NPY_FLOAT64},
+            (void *) tables->nodes.time, tables->nodes.num_rows, NPY_FLOAT64},
         {"flags",
-            (void *) tables->nodes->flags, tables->nodes->num_rows, NPY_UINT32},
+            (void *) tables->nodes.flags, tables->nodes.num_rows, NPY_UINT32},
         {"population",
-            (void *) tables->nodes->population, tables->nodes->num_rows, NPY_INT32},
+            (void *) tables->nodes.population, tables->nodes.num_rows, NPY_INT32},
         {"individual",
-            (void *) tables->nodes->individual, tables->nodes->num_rows, NPY_INT32},
+            (void *) tables->nodes.individual, tables->nodes.num_rows, NPY_INT32},
         {"metadata",
-            (void *) tables->nodes->metadata, tables->nodes->metadata_length, NPY_INT8},
+            (void *) tables->nodes.metadata, tables->nodes.metadata_length, NPY_INT8},
         {"metadata_offset",
-            (void *) tables->nodes->metadata_offset, tables->nodes->num_rows + 1, NPY_UINT32},
+            (void *) tables->nodes.metadata_offset, tables->nodes.num_rows + 1, NPY_UINT32},
         {NULL},
     };
 
     struct table_col edge_cols[] = {
-        {"left", (void *) tables->edges->left, tables->edges->num_rows, NPY_FLOAT64},
-        {"right", (void *) tables->edges->right, tables->edges->num_rows, NPY_FLOAT64},
-        {"parent", (void *) tables->edges->parent, tables->edges->num_rows, NPY_INT32},
-        {"child", (void *) tables->edges->child, tables->edges->num_rows, NPY_INT32},
+        {"left", (void *) tables->edges.left, tables->edges.num_rows, NPY_FLOAT64},
+        {"right", (void *) tables->edges.right, tables->edges.num_rows, NPY_FLOAT64},
+        {"parent", (void *) tables->edges.parent, tables->edges.num_rows, NPY_INT32},
+        {"child", (void *) tables->edges.child, tables->edges.num_rows, NPY_INT32},
         {NULL},
     };
 
     struct table_col migration_cols[] = {
         {"left",
-            (void *) tables->migrations->left, tables->migrations->num_rows,  NPY_FLOAT64},
+            (void *) tables->migrations.left, tables->migrations.num_rows,  NPY_FLOAT64},
         {"right",
-            (void *) tables->migrations->right, tables->migrations->num_rows,  NPY_FLOAT64},
+            (void *) tables->migrations.right, tables->migrations.num_rows,  NPY_FLOAT64},
         {"node",
-            (void *) tables->migrations->node, tables->migrations->num_rows,  NPY_INT32},
+            (void *) tables->migrations.node, tables->migrations.num_rows,  NPY_INT32},
         {"source",
-            (void *) tables->migrations->source, tables->migrations->num_rows,  NPY_INT32},
+            (void *) tables->migrations.source, tables->migrations.num_rows,  NPY_INT32},
         {"dest",
-            (void *) tables->migrations->dest, tables->migrations->num_rows,  NPY_INT32},
+            (void *) tables->migrations.dest, tables->migrations.num_rows,  NPY_INT32},
         {"time",
-            (void *) tables->migrations->time, tables->migrations->num_rows,  NPY_FLOAT64},
+            (void *) tables->migrations.time, tables->migrations.num_rows,  NPY_FLOAT64},
         {NULL},
     };
 
     struct table_col site_cols[] = {
         {"position",
-            (void *) tables->sites->position, tables->sites->num_rows, NPY_FLOAT64},
+            (void *) tables->sites.position, tables->sites.num_rows, NPY_FLOAT64},
         {"ancestral_state",
-            (void *) tables->sites->ancestral_state, tables->sites->ancestral_state_length,
+            (void *) tables->sites.ancestral_state, tables->sites.ancestral_state_length,
             NPY_INT8},
         {"ancestral_state_offset",
-            (void *) tables->sites->ancestral_state_offset, tables->sites->num_rows + 1,
+            (void *) tables->sites.ancestral_state_offset, tables->sites.num_rows + 1,
             NPY_UINT32},
         {"metadata",
-            (void *) tables->sites->metadata, tables->sites->metadata_length, NPY_INT8},
+            (void *) tables->sites.metadata, tables->sites.metadata_length, NPY_INT8},
         {"metadata_offset",
-            (void *) tables->sites->metadata_offset, tables->sites->num_rows + 1, NPY_UINT32},
+            (void *) tables->sites.metadata_offset, tables->sites.num_rows + 1, NPY_UINT32},
         {NULL},
     };
 
     struct table_col mutation_cols[] = {
         {"site",
-            (void *) tables->mutations->site, tables->mutations->num_rows, NPY_INT32},
+            (void *) tables->mutations.site, tables->mutations.num_rows, NPY_INT32},
         {"node",
-            (void *) tables->mutations->node, tables->mutations->num_rows, NPY_INT32},
+            (void *) tables->mutations.node, tables->mutations.num_rows, NPY_INT32},
         {"parent",
-            (void *) tables->mutations->parent, tables->mutations->num_rows, NPY_INT32},
+            (void *) tables->mutations.parent, tables->mutations.num_rows, NPY_INT32},
         {"derived_state",
-            (void *) tables->mutations->derived_state,
-            tables->mutations->derived_state_length, NPY_INT8},
+            (void *) tables->mutations.derived_state,
+            tables->mutations.derived_state_length, NPY_INT8},
         {"derived_state_offset",
-            (void *) tables->mutations->derived_state_offset,
-            tables->mutations->num_rows + 1, NPY_UINT32},
+            (void *) tables->mutations.derived_state_offset,
+            tables->mutations.num_rows + 1, NPY_UINT32},
         {"metadata",
-            (void *) tables->mutations->metadata,
-            tables->mutations->metadata_length, NPY_INT8},
+            (void *) tables->mutations.metadata,
+            tables->mutations.metadata_length, NPY_INT8},
         {"metadata_offset",
-            (void *) tables->mutations->metadata_offset,
-            tables->mutations->num_rows + 1, NPY_UINT32},
+            (void *) tables->mutations.metadata_offset,
+            tables->mutations.num_rows + 1, NPY_UINT32},
         {NULL},
     };
 
     struct table_col population_cols[] = {
-        {"metadata", (void *) tables->populations->metadata,
-            tables->populations->metadata_length, NPY_INT8},
-        {"metadata_offset", (void *) tables->populations->metadata_offset,
-            tables->populations->num_rows+ 1, NPY_UINT32},
+        {"metadata", (void *) tables->populations.metadata,
+            tables->populations.metadata_length, NPY_INT8},
+        {"metadata_offset", (void *) tables->populations.metadata_offset,
+            tables->populations.num_rows+ 1, NPY_UINT32},
         {NULL},
     };
 
     struct table_col provenance_cols[] = {
-        {"timestamp", (void *) tables->provenances->timestamp,
-            tables->provenances->timestamp_length, NPY_INT8},
-        {"timestamp_offset", (void *) tables->provenances->timestamp_offset,
-            tables->provenances->num_rows+ 1, NPY_UINT32},
-        {"record", (void *) tables->provenances->record,
-            tables->provenances->record_length, NPY_INT8},
-        {"record_offset", (void *) tables->provenances->record_offset,
-            tables->provenances->num_rows + 1, NPY_UINT32},
+        {"timestamp", (void *) tables->provenances.timestamp,
+            tables->provenances.timestamp_length, NPY_INT8},
+        {"timestamp_offset", (void *) tables->provenances.timestamp_offset,
+            tables->provenances.num_rows+ 1, NPY_UINT32},
+        {"record", (void *) tables->provenances.record,
+            tables->provenances.record_length, NPY_INT8},
+        {"record_offset", (void *) tables->provenances.record_offset,
+            tables->provenances.num_rows + 1, NPY_UINT32},
         {NULL},
     };
 
@@ -1463,7 +1451,7 @@ out:
 
 /* Returns a dictionary encoding of the specified table collection */
 static PyObject*
-dump_tables_dict(tsk_tbl_collection_t *tables)
+dump_tables_dict(tsk_table_collection_t *tables)
 {
     PyObject *ret = NULL;
     PyObject *dict = NULL;
@@ -1516,7 +1504,7 @@ static void
 LightweightTableCollection_dealloc(LightweightTableCollection* self)
 {
     if (self->tables != NULL) {
-        tsk_tbl_collection_free(self->tables);
+        tsk_table_collection_free(self->tables);
         PyMem_Free(self->tables);
         self->tables = NULL;
     }
@@ -1540,7 +1528,7 @@ LightweightTableCollection_init(LightweightTableCollection *self, PyObject *args
         PyErr_NoMemory();
         goto out;
     }
-    err = tsk_tbl_collection_alloc(self->tables, TSK_ALLOC_TABLES);
+    err = tsk_table_collection_init(self->tables, 0);
     if (err != 0) {
         handle_library_error(err);
         goto out;
@@ -2339,22 +2327,12 @@ static int
 Simulator_parse_population_configuration(Simulator *self, PyObject *py_pop_config)
 {
     int ret = -1;
-    Py_ssize_t j, num_populations;
+    Py_ssize_t j;
     double initial_size, growth_rate;
     int err;
     PyObject *item, *value;
 
     if (Simulator_check_sim(self) != 0) {
-        goto out;
-    }
-    num_populations = PyList_Size(py_pop_config);
-    if (num_populations == 0) {
-        PyErr_SetString(PyExc_ValueError, "Empty population configuration");
-        goto out;
-    }
-    err = msp_set_num_populations(self->sim, (size_t) num_populations);
-    if (err != 0) {
-        handle_input_error(err);
         goto out;
     }
     for (j = 0; j < PyList_Size(py_pop_config); j++) {
@@ -2436,10 +2414,60 @@ out:
 }
 
 static int
+Simulator_parse_sweep_genic_selection_model(Simulator *self, PyObject *py_model,
+        double reference_size)
+{
+    int ret = -1;
+    int err;
+    double position, start_frequency, end_frequency, alpha, dt;
+    PyObject *value;
+
+    value = get_dict_number(py_model, "position");
+    if (value == NULL) {
+        goto out;
+    }
+    position = PyFloat_AsDouble(value);
+
+    value = get_dict_number(py_model, "start_frequency");
+    if (value == NULL) {
+        goto out;
+    }
+    start_frequency = PyFloat_AsDouble(value);
+
+    value = get_dict_number(py_model, "end_frequency");
+    if (value == NULL) {
+        goto out;
+    }
+    end_frequency = PyFloat_AsDouble(value);
+
+    value = get_dict_number(py_model, "alpha");
+    if (value == NULL) {
+        goto out;
+    }
+    alpha = PyFloat_AsDouble(value);
+
+    value = get_dict_number(py_model, "dt");
+    if (value == NULL) {
+        goto out;
+    }
+    dt = PyFloat_AsDouble(value);
+
+    err = msp_set_simulation_model_sweep_genic_selection(self->sim, reference_size,
+            position, start_frequency, end_frequency, alpha, dt);
+    if (err != 0) {
+        handle_input_error(err);
+        goto out;
+    }
+    ret = 0;
+out:
+    return ret;
+}
+
+static int
 Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
 {
     int ret = -1;
-    int err = -1;
+    int err = 0;
     PyObject *py_name = NULL;
     PyObject *hudson_s = NULL;
     PyObject *smc_s = NULL;
@@ -2447,9 +2475,10 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     PyObject *dtwf_s = NULL;
     PyObject *dirac_s = NULL;
     PyObject *beta_s = NULL;
+    PyObject *sweep_genic_selection_s = NULL;
     PyObject *value;
-    int is_hudson, is_dtwf, is_smc, is_smc_prime, is_dirac, is_beta;
-    double population_size, psi, c, alpha, truncation_point;
+    int is_hudson, is_dtwf, is_smc, is_smc_prime, is_dirac, is_beta, is_sweep_genic_selection;
+    double reference_size, psi, c, alpha, truncation_point;
 
     if (Simulator_check_sim(self) != 0) {
         goto out;
@@ -2478,13 +2507,17 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     if (beta_s == NULL) {
         goto out;
     }
+    sweep_genic_selection_s = Py_BuildValue("s", "sweep_genic_selection");
+    if (sweep_genic_selection_s == NULL) {
+        goto out;
+    }
 
-    value = get_dict_number(py_model, "population_size");
+    value = get_dict_number(py_model, "reference_size");
     if (value == NULL) {
         goto out;
     }
-    population_size = PyFloat_AsDouble(value);
-    if (population_size <= 0) {
+    reference_size = PyFloat_AsDouble(value);
+    if (reference_size <= 0) {
         PyErr_SetString(PyExc_ValueError, "population size must be >= 0");
         goto out;
     }
@@ -2501,7 +2534,7 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
         goto out;
     }
     if (is_hudson) {
-        err = msp_set_simulation_model_hudson(self->sim, population_size);
+        err = msp_set_simulation_model_hudson(self->sim, reference_size);
     }
 
     is_dtwf = PyObject_RichCompareBool(py_name, dtwf_s, Py_EQ);
@@ -2509,7 +2542,7 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
         goto out;
     }
     if (is_dtwf) {
-        err = msp_set_simulation_model_dtwf(self->sim, population_size);
+        err = msp_set_simulation_model_dtwf(self->sim, reference_size);
     }
 
     is_smc = PyObject_RichCompareBool(py_name, smc_s, Py_EQ);
@@ -2517,7 +2550,7 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
         goto out;
     }
     if (is_smc) {
-        err = msp_set_simulation_model_smc(self->sim, population_size);
+        err = msp_set_simulation_model_smc(self->sim, reference_size);
     }
 
     is_smc_prime = PyObject_RichCompareBool(py_name, smc_prime_s, Py_EQ);
@@ -2525,7 +2558,7 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
         goto out;
     }
     if (is_smc_prime) {
-        err = msp_set_simulation_model_smc_prime(self->sim, population_size);
+        err = msp_set_simulation_model_smc_prime(self->sim, reference_size);
     }
 
     is_dirac = PyObject_RichCompareBool(py_name, dirac_s, Py_EQ);
@@ -2551,7 +2584,7 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
             PyErr_SetString(PyExc_ValueError, "c >= 0");
             goto out;
         }
-        err = msp_set_simulation_model_dirac(self->sim, population_size, psi, c);
+        err = msp_set_simulation_model_dirac(self->sim, reference_size, psi, c);
     }
 
     is_beta = PyObject_RichCompareBool(py_name, beta_s, Py_EQ);
@@ -2570,11 +2603,23 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
         }
         truncation_point = PyFloat_AsDouble(value);
         /* TODO range checking on alpha and truncation_point */
-        err = msp_set_simulation_model_beta(self->sim, population_size,
+        err = msp_set_simulation_model_beta(self->sim, reference_size,
                 alpha, truncation_point);
     }
 
-    if (! (is_hudson || is_dtwf || is_smc || is_smc_prime || is_dirac || is_beta)) {
+    is_sweep_genic_selection = PyObject_RichCompareBool(py_name, sweep_genic_selection_s, Py_EQ);
+    if (is_sweep_genic_selection == -1) {
+        goto out;
+    }
+    if (is_sweep_genic_selection) {
+        ret = Simulator_parse_sweep_genic_selection_model(self, py_model, reference_size);
+        if (ret != 0) {
+            goto out;
+        }
+    }
+
+    if (! (is_hudson || is_dtwf || is_smc || is_smc_prime || is_dirac
+                || is_beta || is_sweep_genic_selection)) {
         PyErr_SetString(PyExc_ValueError, "Unknown simulation model");
         goto out;
     }
@@ -2590,9 +2635,9 @@ out:
     Py_XDECREF(smc_prime_s);
     Py_XDECREF(beta_s);
     Py_XDECREF(dirac_s);
+    Py_XDECREF(sweep_genic_selection_s);
     return ret;
 }
-
 
 static int
 Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
@@ -2820,7 +2865,8 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     static char *kwlist[] = {"samples", "recombination_map", "random_generator",
         "tables", "population_configuration", "migration_matrix", "demographic_events",
         "model", "avl_node_block_size", "segment_block_size",
-        "node_mapping_block_size", "store_migrations", "start_time", NULL};
+        "node_mapping_block_size", "store_migrations", "start_time",
+        "store_full_arg", "num_labels", NULL};
     PyObject *py_samples = NULL;
     PyObject *migration_matrix = NULL;
     PyObject *population_configuration = NULL;
@@ -2835,13 +2881,16 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     Py_ssize_t avl_node_block_size = 10;
     Py_ssize_t segment_block_size = 10;
     Py_ssize_t node_mapping_block_size = 10;
+    Py_ssize_t num_labels = 1;
+    Py_ssize_t num_populations = 1;
     int store_migrations = 0;
+    int store_full_arg = 0;
     double start_time = -1;
 
     self->sim = NULL;
     self->random_generator = NULL;
     self->recombination_map = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!|O!O!O!O!nnnid", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!|O!O!O!O!nnnidin", kwlist,
             &PyList_Type, &py_samples,
             &RecombinationMapType, &recombination_map,
             &RandomGeneratorType, &random_generator,
@@ -2851,7 +2900,8 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
             &PyList_Type, &demographic_events,
             &PyDict_Type, &py_model,
             &avl_node_block_size, &segment_block_size,
-            &node_mapping_block_size, &store_migrations, &start_time)) {
+            &node_mapping_block_size, &store_migrations, &start_time,
+            &store_full_arg, &num_labels)) {
         goto out;
     }
     self->random_generator = random_generator;
@@ -2917,9 +2967,22 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
         handle_input_error(sim_ret);
         goto out;
     }
+
     if (population_configuration != NULL) {
-        if (Simulator_parse_population_configuration(self,
-                population_configuration) != 0) {
+        num_populations = PyList_Size(population_configuration);
+        if (num_populations == 0) {
+            PyErr_SetString(PyExc_ValueError, "Empty population configuration");
+            goto out;
+        }
+    }
+    sim_ret = msp_set_dimensions(self->sim, (size_t) num_populations, (size_t) num_labels);
+    if (sim_ret != 0) {
+        handle_input_error(sim_ret);
+        goto out;
+    }
+
+    if (population_configuration != NULL) {
+        if (Simulator_parse_population_configuration(self, population_configuration) != 0) {
             goto out;
         }
         if (migration_matrix == NULL) {
@@ -2943,6 +3006,8 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
             goto out;
         }
     }
+    msp_set_store_full_arg(self->sim, store_full_arg);
+
     sim_ret = msp_initialise(self->sim);
     if (sim_ret != 0) {
         handle_input_error(sim_ret);
@@ -2967,6 +3032,7 @@ Simulator_get_model(Simulator *self)
     PyObject *ret = NULL;
     PyObject *d = NULL;
     PyObject *value = NULL;
+    PyArrayObject *array = NULL;
     simulation_model_t *model;
 
     if (Simulator_check_sim(self) != 0) {
@@ -2975,7 +3041,7 @@ Simulator_get_model(Simulator *self)
     model = msp_get_model(self->sim);
     d = Py_BuildValue("{ss,sd}",
             "name", msp_get_model_name(self->sim),
-            "population_size", msp_get_model(self->sim)->population_size);
+            "reference_size", msp_get_model(self->sim)->reference_size);
     if (model->type == MSP_MODEL_DIRAC) {
         value = Py_BuildValue("d", model->params.dirac_coalescent.psi);
         if (value == NULL) {
@@ -3014,12 +3080,24 @@ Simulator_get_model(Simulator *self)
         }
         Py_DECREF(value);
         value = NULL;
+    } else if (model->type == MSP_MODEL_SWEEP) {
+        value = Py_BuildValue("i", model->params.sweep.locus);
+        if (value == NULL) {
+            goto out;
+        }
+        if (PyDict_SetItemString(d, "locus", value) != 0) {
+            goto out;
+        }
+        Py_DECREF(value);
+        value = NULL;
+        /* TODO fill in the parameters for the different types of trajectories. */
     }
     ret = d;
     d = NULL;
 out:
     Py_XDECREF(d);
     Py_XDECREF(value);
+    Py_XDECREF(array);
     return ret;
 }
 
@@ -3091,6 +3169,17 @@ out:
     return ret;
 }
 
+static PyObject *
+Simulator_get_num_labels(Simulator *self)
+{
+    PyObject *ret = NULL;
+    if (Simulator_check_sim(self) != 0) {
+        goto out;
+    }
+    ret = Py_BuildValue("n", (Py_ssize_t) msp_get_num_labels(self->sim));
+out:
+    return ret;
+}
 
 static PyObject *
 Simulator_get_recombination_rate(Simulator  *self)
@@ -3484,7 +3573,7 @@ Simulator_get_edges(Simulator *self)
     PyObject *ret = NULL;
     PyObject *l = NULL;
     PyObject *py_edge = NULL;
-    tsk_edge_tbl_t *edges = NULL;
+    tsk_edge_table_t *edges = NULL;
     tsk_edge_t edge;
     size_t num_edges, j;
 
@@ -3492,7 +3581,7 @@ Simulator_get_edges(Simulator *self)
         goto out;
     }
     num_edges = msp_get_num_edges(self->sim);
-    edges = self->sim->tables->edges;
+    edges = &self->sim->tables->edges;
     l = PyList_New(num_edges);
     if (l == NULL) {
         goto out;
@@ -3520,7 +3609,7 @@ Simulator_get_nodes(Simulator *self)
     PyObject *ret = NULL;
     PyObject *l = NULL;
     PyObject *py_node = NULL;
-    tsk_node_tbl_t *nodes;
+    tsk_node_table_t *nodes;
     tsk_node_t node;
     size_t num_nodes, j;
 
@@ -3528,7 +3617,7 @@ Simulator_get_nodes(Simulator *self)
         goto out;
     }
     num_nodes = msp_get_num_nodes(self->sim);
-    nodes = self->sim->tables->nodes;
+    nodes = &self->sim->tables->nodes;
     l = PyList_New(num_nodes);
     if (l == NULL) {
         goto out;
@@ -3557,7 +3646,7 @@ Simulator_get_migrations(Simulator *self)
     PyObject *ret = NULL;
     PyObject *l = NULL;
     PyObject *py_mr = NULL;
-    tsk_migration_tbl_t *migrations = NULL;
+    tsk_migration_table_t *migrations = NULL;
     tsk_migration_t mr;
     size_t num_migrations, j;
 
@@ -3565,7 +3654,7 @@ Simulator_get_migrations(Simulator *self)
         goto out;
     }
     num_migrations = msp_get_num_migrations(self->sim);
-    migrations = self->sim->tables->migrations;
+    migrations = &self->sim->tables->migrations;
     l = PyList_New(num_migrations);
     if (l == NULL) {
         goto out;
@@ -3656,7 +3745,7 @@ Simulator_get_samples(Simulator *self)
         goto out;
     }
     for (j = 0; j < num_samples; j++) {
-        population = samples[j].population_id == TSK_NULL_POPULATION? -1:
+        population = samples[j].population_id == TSK_NULL? -1:
             samples[j].population_id;
         t = Py_BuildValue("id", population, samples[j].time);
         if (t == NULL) {
@@ -3678,24 +3767,29 @@ Simulator_run(Simulator *self, PyObject *args)
     PyObject *ret = NULL;
     int status, not_done, coalesced;
     uint64_t chunk = 1024;
-    double max_time = DBL_MAX;
+    double end_time = DBL_MAX;
 
     if (Simulator_check_sim(self) != 0) {
         goto out;
     }
-    if (!PyArg_ParseTuple(args, "|d", &max_time)) {
+    if (!PyArg_ParseTuple(args, "|d", &end_time)) {
         goto out;
     }
+    if (end_time < 0) {
+        PyErr_SetString(PyExc_ValueError, "end_time must be > 0");
+        goto out;
+    }
+
     not_done = 1;
     while (not_done) {
         Py_BEGIN_ALLOW_THREADS
-        status = msp_run(self->sim, max_time, chunk);
+        status = msp_run(self->sim, end_time, chunk);
         Py_END_ALLOW_THREADS
         if (status < 0) {
             handle_library_error(status);
             goto out;
         }
-        not_done = status == 1;
+        not_done = status == MSP_EXIT_MAX_EVENTS;
         if (PyErr_CheckSignals() < 0) {
             goto out;
         }
@@ -3826,6 +3920,8 @@ static PyMethodDef Simulator_methods[] = {
             "Returns the sample size" },
     {"get_num_populations", (PyCFunction) Simulator_get_num_populations, METH_NOARGS,
             "Returns the number of populations." },
+    {"get_num_labels", (PyCFunction) Simulator_get_num_labels, METH_NOARGS,
+            "Returns the number of labels." },
     {"get_recombination_rate",
             (PyCFunction) Simulator_get_recombination_rate, METH_NOARGS,
             "Returns the recombination rate." },
@@ -3982,12 +4078,6 @@ msprime_unset_gsl_error_handler(PyObject *self)
     return Py_BuildValue("");
 }
 
-static PyObject *
-msprime_get_library_version_str(PyObject *self)
-{
-    return Py_BuildValue("s", MSP_LIBRARY_VERSION_STR);
-}
-
 static PyMethodDef msprime_methods[] = {
     {"get_gsl_version", (PyCFunction) msprime_get_gsl_version, METH_NOARGS,
             "Returns the version of GSL we are linking against." },
@@ -3995,54 +4085,31 @@ static PyMethodDef msprime_methods[] = {
             METH_NOARGS, "Restores the GSL error handler to its value before module import." },
     {"unset_gsl_error_handler", (PyCFunction) msprime_unset_gsl_error_handler,
             METH_NOARGS, "Unsets the GSL error handler (and stores the current value)." },
-    {"get_library_version_str", (PyCFunction) msprime_get_library_version_str,
-            METH_NOARGS, "Returns the version of the msp C library." },
     {NULL}        /* Sentinel */
 };
 
-/* Initialisation code supports Python 2.x and 3.x. The framework uses the
- * recommended structure from http://docs.python.org/howto/cporting.html.
- * I've ignored the point about storing state in globals, as the examples
- * from the Python documentation still use this idiom.
- */
-
-#if PY_MAJOR_VERSION >= 3
-
 static struct PyModuleDef msprimemodule = {
     PyModuleDef_HEAD_INIT,
-    "_msprime",   /* name of module */
-    MODULE_DOC, /* module documentation, may be NULL */
+    "_msprime",
+    "Low level interface for msprime",
     -1,
     msprime_methods,
     NULL, NULL, NULL, NULL
 };
 
-#define INITERROR return NULL
-
 PyObject *
 PyInit__msprime(void)
-
-#else
-#define INITERROR return
-
-void
-init_msprime(void)
-#endif
 {
-#if PY_MAJOR_VERSION >= 3
     PyObject *module = PyModule_Create(&msprimemodule);
-#else
-    PyObject *module = Py_InitModule3("_msprime", msprime_methods, MODULE_DOC);
-#endif
     if (module == NULL) {
-        INITERROR;
+        return NULL;;
     }
     import_array();
 
     /* LightweightTableCollection type */
     LightweightTableCollectionType.tp_new = PyType_GenericNew;
     if (PyType_Ready(&LightweightTableCollectionType) < 0) {
-        INITERROR;
+        return NULL;;
     }
     Py_INCREF(&LightweightTableCollectionType);
     PyModule_AddObject(module, "LightweightTableCollection",
@@ -4051,7 +4118,7 @@ init_msprime(void)
     /* RandomGenerator type */
     RandomGeneratorType.tp_new = PyType_GenericNew;
     if (PyType_Ready(&RandomGeneratorType) < 0) {
-        INITERROR;
+        return NULL;;
     }
     Py_INCREF(&RandomGeneratorType);
     PyModule_AddObject(module, "RandomGenerator", (PyObject *) &RandomGeneratorType);
@@ -4059,7 +4126,7 @@ init_msprime(void)
     /* MutationGenerator type */
     MutationGeneratorType.tp_new = PyType_GenericNew;
     if (PyType_Ready(&MutationGeneratorType) < 0) {
-        INITERROR;
+        return NULL;;
     }
     Py_INCREF(&MutationGeneratorType);
     PyModule_AddObject(module, "MutationGenerator", (PyObject *) &MutationGeneratorType);
@@ -4067,7 +4134,7 @@ init_msprime(void)
     /* Simulator type */
     SimulatorType.tp_new = PyType_GenericNew;
     if (PyType_Ready(&SimulatorType) < 0) {
-        INITERROR;
+        return NULL;;
     }
     Py_INCREF(&SimulatorType);
     PyModule_AddObject(module, "Simulator", (PyObject *) &SimulatorType);
@@ -4075,7 +4142,7 @@ init_msprime(void)
     /* RecombinationMap type */
     RecombinationMapType.tp_new = PyType_GenericNew;
     if (PyType_Ready(&RecombinationMapType) < 0) {
-        INITERROR;
+        return NULL;;
     }
     Py_INCREF(&RecombinationMapType);
     PyModule_AddObject(module, "RecombinationMap", (PyObject *) &RecombinationMapType);
@@ -4088,13 +4155,15 @@ init_msprime(void)
     Py_INCREF(MsprimeLibraryError);
     PyModule_AddObject(module, "LibraryError", MsprimeLibraryError);
 
+    PyModule_AddIntConstant(module, "NODE_IS_CA_EVENT", MSP_NODE_IS_CA_EVENT);
+    PyModule_AddIntConstant(module, "NODE_IS_RE_EVENT", MSP_NODE_IS_RE_EVENT);
+    PyModule_AddIntConstant(module, "NODE_IS_MIG_EVENT", MSP_NODE_IS_MIG_EVENT);
+
     /* The function unset_gsl_error_handler should be called at import time,
      * ensuring we capture the value of the handler. However, just in case
      * someone calls restore_gsl_error_handler before this is called, we
      * set it to null. */
     old_gsl_error_handler = NULL;
 
-#if PY_MAJOR_VERSION >= 3
     return module;
-#endif
 }

@@ -1,5 +1,4 @@
-six
-setuptools_scm 
+setuptools_scm
 sphinx-argparse
-h5py
-jsonschema
+sphinx-issues
+tskit

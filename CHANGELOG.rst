@@ -1,4 +1,94 @@
 ********************
+[0.7.3] - 2019-08-03
+********************
+
+**Bug fixes**:
+
+- Support for SMC models coupled with the record_full_arg feature was
+  erroneously removed in a previous version (:issue:`795`). The feature
+  has been resinstated (:pr:`796`).
+
+********************
+[0.7.2] - 2019-07-30
+********************
+
+**Breaking changes**
+
+- The random trajectory has been changed slightly to improve handling
+  of ancient sampling events (:pr:`782`). Thus, simulations for a given
+  random seed will not be identical to previous versions, if ancient
+  samples are used.
+
+**New features**
+
+- Automated Docker builds (:user:`agladstein`; :pr:`661`)
+- Add mean coalescence time to DemographyDebugger (:user:`petrelharp`; :pr:`779`).
+- Improve MassMigration descriptions in DemographyDebugger
+  (:user:`marianne-aspbury`; :pr:`791`).
+
+**Bug fixes**:
+
+- In very, very, very rare cases it was possible to generate a
+  zero waiting time until the next coalescent event, leading to
+  zero branch lengths in the output tree sequence and an error
+  being raised (:user:`molpopgen`, :user:`DL42`, :user:`jeromekelleher`;
+  :issue:`783`, :pr:`785`).
+
+********************
+[0.7.1] - 2019-06-08
+********************
+
+**New features**
+
+- Discrete Time Wright-Fisher simulation model (:user:`DomNelson`).
+- SMC/SMC' simulation models (:user:`jeromekelleher`).
+- Mixed simulation models (:user:`jeromekelleher`).
+- Specify ``end_time`` to allow early-finish for simulations (:user:`jeromekelleher`).
+- Calculation of historical coalescence rates in the DemographyDebugger
+  (:user:`jgallowa07`, :user:`petrelharp`).
+- Additional information on population sizes in DemographyDebugger
+  (:user:`andrewkern`).
+- Remove support for Python 2 (:user:`hugovk`).
+- Allow specifying metadata for populations (:user:`jeromekelleher`).
+
+**Bug fixes**:
+
+- Various minor bug and doc fixes from :user:`hyanwong`, :user:`petrelharp`,
+  :user:`brianzhang01`, :user:`mufernando` and :user:`andrewkern`.
+
+
+**********************
+[0.7.1b1] - 2019-05-31
+**********************
+
+Early release making DTWF code available to beta testers.
+
+********************
+[0.7.0] - 2019-02-19
+********************
+
+Separation of tskit from msprime. Msprime is now solely dedicated to simulating
+the coalescent, and all infrastucture for working with succinct tree sequences
+is now provided by tskit. To ensure compatability, msprime now imports code
+from tskit under the old names, which should ensure that all code continues
+to work without changes.
+
+**New features**
+
+- Ability to record the full ARG (:user:`jerekoskela`; :issue:`665`)
+
+**Bug fixes**:
+
+- Fix deprecation warning (:issue:`695`).
+
+
+**********************
+[0.7.0a1] - 2019-01-14
+**********************
+
+Alpha release for testing the tskit/msprime split.
+
+********************
 [0.6.2] - 2018-12-04
 ********************
 
@@ -13,7 +103,6 @@ Minor bugfix release.
 - Fix performance regression in replication (#608)
 
 
-improvements and bugfixes.
 ********************
 [0.6.1] - 2018-08-25
 ********************
@@ -308,12 +397,12 @@ upcoming functionality.
 - Similarly, the undocumented ``variants`` method has some major changes:
 
   1. The returned tuple has two new values, ``node`` and ``index``
-    in the middle of the tuple (but see the point above about using
-    named attributes).
+     in the middle of the tuple (but see the point above about using
+     named attributes).
 
   2. The returned genotypes are by default numpy arrays. To revert
-    to the old behaviour of returning Python bytes objects, use the
-    ``as_bytes`` argument to the ``variants()`` method.
+     to the old behaviour of returning Python bytes objects, use the
+     ``as_bytes`` argument to the ``variants()`` method.
 
 **New features**:
 

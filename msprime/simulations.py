@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2015-2017 University of Oxford
+# Copyright (C) 2015-2018 University of Oxford
 #
 # This file is part of msprime.
 #
@@ -19,9 +19,6 @@
 """
 Module responsible for running simulations.
 """
-from __future__ import division
-from __future__ import print_function
-
 import collections
 import gzip
 import json
@@ -29,9 +26,19 @@ import math
 import random
 import sys
 import os
+import warnings
+import copy
+import logging
 
-import _msprime
 import tskit
+import numpy as np
+
+from . import provenance
+import _msprime
+
+from _msprime import NODE_IS_CA_EVENT  # NOQA
+from _msprime import NODE_IS_RE_EVENT  # NOQA
+from _msprime import NODE_IS_MIG_EVENT  # NOQA
 
 # Make the low-level generator appear like its from this module
 # NOTE: Using these classes directly from client code is undocumented
@@ -44,6 +51,9 @@ from _msprime import MutationGenerator
 # _msprime.restore_gsl_error_handler(), which will set the error handler to
 # the value that it had before this function was called.
 _msprime.unset_gsl_error_handler()
+
+
+logger = logging.getLogger(__name__)
 
 
 Sample = collections.namedtuple(
@@ -93,18 +103,53 @@ def almost_equal(a, b, rel_tol=1e-9, abs_tol=0.0):
     return abs(a - b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 
 
+def model_factory(model, reference_size=1):
+    """
+    Returns a simulation model corresponding to the specified model and
+    reference size.
+    - If model is None, the default simulation model is returned with the
+      specified reference size.
+    - If model is a string, return the corresponding model instance
+      with the specified reference size
+    - If model is an instance of SimulationModel, return a copy of it.
+      In this case, if the model's reference_size is None, set it to the
+      parameter reference size.
+    - Otherwise return a type error.
+    """
+    model_map = {
+        "hudson": StandardCoalescent(reference_size),
+        "smc": SmcApproxCoalescent(reference_size),
+        "smc_prime": SmcPrimeApproxCoalescent(reference_size),
+        "dtwf": DiscreteTimeWrightFisher(reference_size)
+    }
+    if model is None:
+        model_instance = StandardCoalescent(reference_size)
+    elif isinstance(model, str):
+        lower_model = model.lower()
+        if lower_model not in model_map:
+            raise ValueError("Model '{}' unknown. Choose from {}".format(
+                model, list(model_map.keys())))
+        model_instance = model_map[lower_model]
+    elif isinstance(model, SimulationModel):
+        model_instance = copy.copy(model)
+        if model_instance.reference_size is None:
+            model_instance.reference_size = reference_size
+    else:
+        raise TypeError(
+            "Simulation model must be a string or an instance of SimulationModel")
+    return model_instance
+
+
 def _check_population_configurations(population_configurations):
     err = (
         "Population configurations must be a list of PopulationConfiguration instances")
-    if not isinstance(population_configurations, collections.Iterable):
-        raise TypeError(err)
     for config in population_configurations:
         if not isinstance(config, PopulationConfiguration):
             raise TypeError(err)
 
 
 def _replicate_generator(
-        sim, mutation_generator, num_replicates, provenance_dict, max_time):
+        sim, mutation_generator, num_replicates, provenance_dict, end_time):
     """
     Generator function for the many-replicates case of the simulate
     function.
@@ -114,12 +159,8 @@ def _replicate_generator(
     # simulation if necessary. Much simpler than encoding the details of
     # the random number generator.
     provenance_record = json.dumps(provenance_dict)
-
-    # Should use range here, but Python 2 makes this awkward...
-    j = 0
-    while j < num_replicates:
-        j += 1
-        sim.run(max_time)
+    for j in range(num_replicates):
+        sim.run(end_time)
         tree_sequence = sim.get_tree_sequence(mutation_generator, provenance_record)
         yield tree_sequence
         sim.reset()
@@ -139,7 +180,10 @@ def simulator_factory(
         model=None,
         record_migrations=False,
         from_ts=None,
-        start_time=None):
+        start_time=None,
+        end_time=None,
+        record_full_arg=False,
+        num_labels=None):
     """
     Convenience method to create a simulator instance using the same
     parameters as the `simulate` function. Primarily used for testing.
@@ -186,6 +230,11 @@ def simulator_factory(
     if start_time is not None and start_time < 0:
         raise ValueError("start_time cannot be negative")
 
+    if num_labels is None:
+        num_labels = 1
+    if num_labels < 1:
+        raise ValueError("Must have at least one structured coalescent label")
+
     if from_ts is not None:
         if not isinstance(from_ts, tskit.TreeSequence):
             raise TypeError("from_ts must be a TreeSequence instance.")
@@ -228,7 +277,9 @@ def simulator_factory(
 
     sim = Simulator(the_samples, recomb_map, model, Ne, from_ts)
     sim.store_migrations = record_migrations
+    sim.store_full_arg = record_full_arg
     sim.start_time = start_time
+    sim.num_labels = num_labels
     rng = random_generator
     if rng is None:
         rng = RandomGenerator(_get_random_seed())
@@ -260,17 +311,12 @@ def simulate(
         num_replicates=None,
         from_ts=None,
         start_time=None,
-        # Note max_time is not documented here because it does not currently have
-        # exactly the semantics that we want as it doesn't guarantee that the
-        # times of nodes returned are < max_time. However, it's useful for
-        # testing, so we keep it. We call it __tmp_max_time just to make sure
-        # it's not used accidentially though.
-        # TODO also, when implementing rename to end_time. See
-        # https://github.com/tskit-dev/msprime/issues/564
-        __tmp_max_time=None):
+        end_time=None,
+        record_full_arg=False,
+        num_labels=None):
     """
     Simulates the coalescent with recombination under the specified model
-    parameters and returns the resulting :class:`.TreeSequence`. Note that
+    parameters and returns the resulting :class:`tskit.TreeSequence`. Note that
     Ne is the effective diploid population size (so the effective number
     of genomes in the population is 2*Ne), but ``sample_size`` is the
     number of (monoploid) genomes sampled.
@@ -332,11 +378,11 @@ def simulate(
         seeds must be between 1 and :math:`2^{32} - 1`.
     :param int num_replicates: The number of replicates of the specified
         parameters to simulate. If this is not specified or None,
-        no replication is performed and a :class:`.TreeSequence` object
+        no replication is performed and a :class:`tskit.TreeSequence` object
         returned. If :obj:`num_replicates` is provided, the specified
         number of replicates is performed, and an iterator over the
-        resulting :class:`.TreeSequence` objects returned.
-    :param .TreeSequence from_ts: If specified, initialise the simulation
+        resulting :class:`tskit.TreeSequence` objects returned.
+    :param tskit.TreeSequence from_ts: If specified, initialise the simulation
         from the root segments of this tree sequence and return the
         completed tree sequence. Please see :ref:`here
         <sec_api_simulate_from>` for details on the required properties
@@ -347,12 +393,29 @@ def simulate(
         time is zero if performing a simulation of a set of samples,
         or is the time of the oldest node if simulating from an
         existing tree sequence (see the ``from_ts`` parameter).
-    :return: The :class:`.TreeSequence` object representing the results
+    :param float end_time: If specified, terminate the simulation at the
+        specified time. In the returned tree sequence, all rootward paths from
+        samples with time < end_time will end in a node with one child with
+        time equal to end_time. Sample nodes with time >= end_time will
+        also be present in the output tree sequence. If not specified or ``None``,
+        run the simulation until all samples have an MRCA at all positions in
+        the genome.
+    :param bool record_full_arg: If True, record all intermediate nodes
+        arising from common ancestor and recombination events in the output
+        tree sequence. This will result in unary nodes (i.e., nodes in marginal
+        trees that have only one child). Defaults to False.
+    :param model: The simulation model to use.
+        This can either be a string (e.g., ``"smc_prime"``) or an instance of
+        a simulation model class (e.g, ``msprime.DiscreteTimeWrightFisher(100)``.
+        Please see the :ref:`sec_api_simulation_models` section for more details
+        on specifying simulations models.
+    :type model: str or simulation model instance
+    :return: The :class:`tskit.TreeSequence` object representing the results
         of the simulation if no replication is performed, or an
         iterator over the independent replicates simulated if the
         :obj:`num_replicates` parameter has been used.
-    :rtype: :class:`.TreeSequence` or an iterator over
-        :class:`.TreeSequence` replicates.
+    :rtype: :class:`tskit.TreeSequence` or an iterator over
+        :class:`tskit.TreeSequence` replicates.
     :warning: If using replication, do not store the results of the
         iterator in a list! For performance reasons, the same
         underlying object may be used for every TreeSequence
@@ -379,14 +442,16 @@ def simulate(
         model=model,
         record_migrations=record_migrations,
         from_ts=from_ts,
-        start_time=start_time)
+        start_time=start_time,
+        record_full_arg=record_full_arg,
+        num_labels=num_labels)
 
     parameters = {
         "command": "simulate",
         "random_seed": seed,
         "TODO": "add other simulation parameters"
     }
-    provenance_dict = tskit.provenance.get_provenance_dict(parameters)
+    provenance_dict = provenance.get_provenance_dict(parameters)
 
     if mutation_generator is not None:
         # This error was added in version 0.6.1.
@@ -417,10 +482,10 @@ def simulate(
         mutation_generator = MutationGenerator(rng, mutation_rate)
     if num_replicates is None:
         return next(_replicate_generator(
-            sim, mutation_generator, 1, provenance_dict, __tmp_max_time))
+            sim, mutation_generator, 1, provenance_dict, end_time))
     else:
         return _replicate_generator(
-            sim, mutation_generator, num_replicates, provenance_dict, __tmp_max_time)
+            sim, mutation_generator, num_replicates, provenance_dict, end_time)
 
 
 class Simulator(object):
@@ -440,17 +505,19 @@ class Simulator(object):
         if not isinstance(recombination_map, RecombinationMap):
             raise TypeError("RecombinationMap instance required")
         self.ll_sim = None
-        self.set_model(model, Ne)
+        self.model = model_factory(model, Ne)
         self.recombination_map = recombination_map
         self.from_ts = from_ts
         self.start_time = None
         self.random_generator = None
         self.population_configurations = [
-            PopulationConfiguration(initial_size=self.model.population_size)]
+            PopulationConfiguration(initial_size=self.model.reference_size)]
         self.migration_matrix = [[0]]
         self.demographic_events = []
         self.model_change_events = []
         self.store_migrations = False
+        self.store_full_arg = False
+        self.num_labels = 1
         # We always need at least n segments, so no point in making
         # allocation any smaller than this.
         num_samples = (
@@ -459,7 +526,7 @@ class Simulator(object):
         self.segment_block_size = max(block_size, num_samples)
         self.avl_node_block_size = block_size
         self.node_mapping_block_size = block_size
-        self.max_time = None
+        self.end_time = None
 
     @property
     def num_loci(self):
@@ -563,7 +630,7 @@ class Simulator(object):
         # set it to the population size.
         for pop_conf in self.population_configurations:
             if pop_conf.initial_size is None:
-                pop_conf.initial_size = self.model.population_size
+                pop_conf.initial_size = self.model.reference_size
         # Now set the default migration matrix.
         N = len(self.population_configurations)
         self.migration_matrix = [[0 for j in range(N)] for k in range(N)]
@@ -572,45 +639,20 @@ class Simulator(object):
         err = (
             "Demographic events must be a list of DemographicEvent instances "
             "sorted in non-decreasing order of time.")
-        if not isinstance(demographic_events, collections.Iterable):
-            raise TypeError(err)
         self.demographic_events = []
         self.model_change_events = []
         for event in demographic_events:
             if not isinstance(event, DemographicEvent):
                 raise TypeError(err)
             if isinstance(event, SimulationModelChange):
+                # Take a copy so that we're not modifying our input params
+                event = copy.copy(event)
+                # Update the model so that we can parse strings and set
+                # the reference size appropriately.
+                event.model = model_factory(event.model, self.model.reference_size)
                 self.model_change_events.append(event)
             else:
                 self.demographic_events.append(event)
-
-    def set_model(self, model, population_size):
-        """
-        Sets the simulation model to the specified value. This may be either a string
-        or a SimulationModel instance. If None, the default simulation model is used
-        (i.e., Hudson's algorithm).
-        """
-        model_map = {
-            "hudson": StandardCoalescent(population_size),
-            "smc": SmcApproxCoalescent(population_size),
-            "smc_prime": SmcPrimeApproxCoalescent(population_size),
-            "dtwf": DiscreteTimeWrightFisher(population_size)
-        }
-        if model is None:
-            model_instance = StandardCoalescent(population_size)
-        elif isinstance(model, str):
-            lower_model = model.lower()
-            if lower_model not in model_map:
-                raise ValueError("Model '{}' unknown. Choose from {}".format(
-                    model, list(model_map.keys())))
-            model_instance = model_map[lower_model]
-        else:
-            if not isinstance(model, SimulationModel):
-                raise TypeError(
-                    "Simulation model must be a string or an instance of "
-                    "SimulationModel")
-            model_instance = model
-        self.model = model_instance
 
     def create_ll_instance(self):
         # Now, convert the high-level values into their low-level
@@ -642,12 +684,14 @@ class Simulator(object):
             population_configuration=ll_population_configuration,
             demographic_events=ll_demographic_events,
             store_migrations=self.store_migrations,
+            store_full_arg=self.store_full_arg,
+            num_labels=self.num_labels,
             segment_block_size=self.segment_block_size,
             avl_node_block_size=self.avl_node_block_size,
             node_mapping_block_size=self.node_mapping_block_size)
         return ll_sim
 
-    def run(self, max_time=None):
+    def run(self, end_time=None):
         """
         Runs the simulation until complete coalescence has occurred.
         """
@@ -656,8 +700,8 @@ class Simulator(object):
         for event in self.model_change_events:
             self.ll_sim.run(event.time)
             self.ll_sim.set_model(event.model.get_ll_representation())
-        max_time = sys.float_info.max if max_time is None else max_time
-        self.ll_sim.run(max_time)
+        end_time = sys.float_info.max if end_time is None else end_time
+        self.ll_sim.run(end_time)
         self.ll_sim.finalise_tables()
 
     def get_tree_sequence(self, mutation_generator=None, provenance_record=None):
@@ -669,6 +713,12 @@ class Simulator(object):
         tables = tskit.TableCollection.fromdict(self.ll_tables.asdict())
         if provenance_record is not None:
             tables.provenances.add_row(provenance_record)
+        if self.from_ts is None:
+            # Add the populations with metadata
+            assert len(tables.populations) == len(self.population_configurations)
+            tables.populations.clear()
+            for pop_config in self.population_configurations:
+                tables.populations.add_row(metadata=pop_config.encoded_metadata)
         return tables.tree_sequence()
 
     def reset(self):
@@ -746,19 +796,29 @@ class RecombinationMap(object):
     @classmethod
     def read_hapmap(cls, filename):
         """
-        Parses the specified file in HapMap format. These files must contain
-        a single header line (which is ignored), and then each subsequent
-        line denotes a position/rate pair. Positions are in units of bases,
-        and recombination rates in centimorgans/Megabase. The first column
-        in this file is ignored, as are subsequence columns after the
-        Position and Rate. A sample of this format is as follows::
+        Parses the specified file in HapMap format. These files must be
+        white-space-delimited, and contain a single header line (which is
+        ignored), and then each subsequent line contains the starting position
+        and recombination rate for the segment from that position (inclusive)
+        to the starting position on the next line (exclusive). Starting
+        positions of each segment are given in units of bases, and
+        recombination rates in centimorgans/Megabase. The first column in this
+        file is ignored, as are additional columns after the third (Position is
+        assumed to be the second column, and Rate is assumed to be the third).
+        If the first starting position is not equal to zero, then a
+        zero-recombination region is inserted at the start of the chromosome.
+
+        A sample of this format is as follows::
 
             Chromosome	Position(bp)	Rate(cM/Mb)	Map(cM)
-            chr1	55550	2.981822	0.000000
-            chr1	82571	2.082414	0.080572
-            chr1	88169	2.081358	0.092229
-            chr1	254996	3.354927	0.439456
-            chr1	564598	2.887498	1.478148
+            chr1	55550	        2.981822	0.000000
+            chr1	82571	        2.082414	0.080572
+            chr1	88169	        2.081358	0.092229
+            chr1	254996	        3.354927	0.439456
+            chr1	564598	        2.887498	1.478148
+            ...
+            chr1	182973428	2.512769	122.832331
+            chr1	183630013	0.000000	124.482178
 
         :param str filename: The name of the file to be parsed. This may be
             in plain text or gzipped plain text.
@@ -788,6 +848,25 @@ class RecombinationMap(object):
         finally:
             f.close()
         return cls(positions, rates)
+
+    @property
+    def mean_recombination_rate(self):
+        """
+        Return the weighted mean recombination rate
+        across all windows of the entire recombination map.
+        """
+        chrom_length = self._ll_recombination_map.get_sequence_length()
+
+        positions = np.array(self._ll_recombination_map.get_positions())
+        positions_diff = self._ll_recombination_map.get_positions()[1:]
+        positions_diff.append(chrom_length)
+        positions_diff = np.array(positions_diff)
+        window_sizes = positions_diff - positions
+
+        weights = window_sizes / chrom_length
+        rates = self._ll_recombination_map.get_rates()
+
+        return np.average(rates, weights=weights)
 
     def get_ll_recombination_map(self):
         return self._ll_recombination_map
@@ -839,8 +918,15 @@ class PopulationConfiguration(object):
         population per generation. Growth rates can be negative. This is zero for a
         constant population size, and positive for a population that has been
         growing. Defaults to 0.
+    :param dict metadata: A JSON-encodable dictionary of metadata to associate
+        with the corresponding Population in the output tree sequence.
+        If not specified or None, no metadata is stored (i.e., an empty bytes array).
+        Note that this metadata is ignored when using the ``from_ts`` argument to
+        :func:`simulate`, as the population definitions in the tree sequence that
+        is used as the starting point take precedence.
     """
-    def __init__(self, sample_size=None, initial_size=None, growth_rate=0.0):
+    def __init__(
+            self, sample_size=None, initial_size=None, growth_rate=0.0, metadata=None):
         if initial_size is not None and initial_size <= 0:
             raise ValueError("Population size must be > 0")
         if sample_size is not None and sample_size < 0:
@@ -848,6 +934,10 @@ class PopulationConfiguration(object):
         self.sample_size = sample_size
         self.initial_size = initial_size
         self.growth_rate = growth_rate
+        self.metadata = metadata
+        self.encoded_metadata = b''
+        if self.metadata is not None:
+            self.encoded_metadata = json.dumps(self.metadata).encode()
 
     def get_ll_representation(self):
         """
@@ -894,7 +984,7 @@ class PopulationParametersChange(DemographicEvent):
     def __init__(
             self, time, initial_size=None, growth_rate=None, population=None,
             population_id=None):
-        super(PopulationParametersChange, self).__init__(
+        super().__init__(
             "population_parameters_change", time)
         if population_id is not None and population is not None:
             raise ValueError(
@@ -943,7 +1033,7 @@ class MigrationRateChange(DemographicEvent):
         simultaneously.
     """
     def __init__(self, time, rate, matrix_index=None):
-        super(MigrationRateChange, self).__init__(
+        super().__init__(
             "migration_rate_change", time)
         self.rate = rate
         self.matrix_index = matrix_index
@@ -973,8 +1063,8 @@ class MassMigration(DemographicEvent):
     A mass migration event in which some fraction of the population in
     one deme simultaneously move to another deme, viewed backwards in
     time. Each lineage currently present in the source population
-    moves to the destination population with probability equal to
-    ``proportion``.
+    moves to the destination population (backwards in time) with
+    probability equal to ``proportion``.
 
     This event class generalises the population split (``-ej``) and
     admixture (``-es``) events from ``ms``. Note that MassMigrations
@@ -987,7 +1077,7 @@ class MassMigration(DemographicEvent):
         the source population migrates to the destination population.
     """
     def __init__(self, time, source, dest=None, proportion=1.0, destination=None):
-        super(MassMigration, self).__init__("mass_migration", time)
+        super().__init__("mass_migration", time)
         if dest is not None and destination is not None:
             raise ValueError(
                 "dest and destination are aliases; cannot supply both")
@@ -1008,24 +1098,42 @@ class MassMigration(DemographicEvent):
 
     def __str__(self):
         return (
-            "Mass migration: lineages move from {} to {} with "
-            "probability {}".format(
-                self.source, self.dest, self.proportion))
+            "Mass migration: "
+            "Lineages moved with probability {} backwards in time with "
+            "source {} & dest {}"
+            "\n                     "
+            "(equivalent to migration from {} to {} forwards in time)".format(
+                self.proportion, self.source, self.dest,
+                self.dest, self.source))
 
 
 class SimulationModelChange(DemographicEvent):
-    # TODO document
+    """
+    An event representing a change of underlying :ref:`simulation model
+    <sec_api_simulation_models>`.
+
+    :param float time: The time at which the simulation model changes
+        to the new model, in generations. After this time, all internal
+        tree nodes, edges and migrations are the result of the new model.
+    :param model: The new simulation model to use.
+        This can either be a string (e.g., ``"smc_prime"``) or an instance of
+        a simulation model class (e.g, ``msprime.DiscreteTimeWrightFisher(100)``.
+        Please see the :ref:`sec_api_simulation_models` section for more details
+        on specifying simulations models. If the argument is a string, the
+        reference population size is set from the top level ``Ne`` parameter
+        to :func:`.simulate`. If this is None (the default) we revert to
+        the standard coalescent with the reference population size set by ``Ne``.
+    :type model: str or simulation model instance
+    """
     # Implementation note: these are treated as demographic events for the
     # sake of the high-level interface, but are treated differently at run
     # time. There is no corresponding demographic event in the C layer, as
     # this would add too much complexity to the main loops. Instead, we
     # detect these events at the high level, and insert calls to set_model
     # as appropriate.
-    def __init__(self, time, model):
-        super(SimulationModelChange, self).__init__("simulation_model_change", time)
-        if not isinstance(model, SimulationModel):
-            raise TypeError(
-                "Simulation model must be an instance of SimulationModel")
+    def __init__(self, time, model=None):
+        super().__init__("simulation_model_change", time)
+        # The model will be updated later during the call to simulate
         self.model = model
 
     def get_ll_representation(self, num_populations):
@@ -1042,7 +1150,7 @@ class SimulationModelChange(DemographicEvent):
 class SimpleBottleneck(DemographicEvent):
     # This is an unsupported/undocumented demographic event.
     def __init__(self, time, population=None, proportion=1.0, population_id=None):
-        super(SimpleBottleneck, self).__init__("simple_bottleneck", time)
+        super().__init__("simple_bottleneck", time)
         if population_id is not None and population is not None:
             raise ValueError(
                 "population_id and population are aliases; cannot supply both.")
@@ -1069,7 +1177,7 @@ class InstantaneousBottleneck(DemographicEvent):
     # TODO document
 
     def __init__(self, time, population=None, strength=1.0, population_id=None):
-        super(InstantaneousBottleneck, self).__init__("instantaneous_bottleneck", time)
+        super().__init__("instantaneous_bottleneck", time)
         if population_id is not None and population is not None:
             raise ValueError(
                 "population_id and population are aliases; cannot supply both.")
@@ -1095,38 +1203,79 @@ class InstantaneousBottleneck(DemographicEvent):
 
 class SimulationModel(object):
     """
-    Superclass of all simulation models.
+    Abstract superclass of all simulation models.
     """
     name = None
 
-    def __init__(self, population_size=1):
-        self.population_size = population_size
+    def __init__(self, reference_size=None):
+        self.reference_size = reference_size
 
     def get_ll_representation(self):
-        return {"name": self.name, "population_size": self.population_size}
+        return {"name": self.name, "reference_size": self.reference_size}
+
+    def __str__(self):
+        return "{}(reference_size={})".format(self.name, self.reference_size)
 
 
 class StandardCoalescent(SimulationModel):
     """
     The classical coalescent with recombination model (i.e., Hudson's algorithm).
+    The string ``"hudson"`` can be used to refer to this model.
+
+    This is the default simulation model.
     """
     name = "hudson"
 
 
 class SmcApproxCoalescent(SimulationModel):
-    # TODO document
+    """
+    The original SMC model defined by McVean and Cardin. This
+    model is implemented using a naive rejection sampling approach
+    and so it may not be any more efficient to simulate than the
+    standard Hudson model.
+
+    The string ``"smc"`` can be used to refer to this model.
+    """
     name = "smc"
 
 
 class SmcPrimeApproxCoalescent(SimulationModel):
-    # TODO document
+    """
+    The SMC' model defined by Marjoram and Wall as an improvement on the
+    original SMC. model is implemented using a naive rejection sampling
+    approach and so it may not be any more efficient to simulate than the
+    standard Hudson model.
+
+    The string ``"smc_prime"`` can be used to refer to this model.
+    """
     name = "smc_prime"
 
 
 class DiscreteTimeWrightFisher(SimulationModel):
     """
-    A discrete backwards-time Wright Fisher model, with back-and-forth
-    recombination
+    A discrete backwards-time Wright-Fisher model, with diploid back-and-forth
+    recombination. The string ``"dtwf"`` can be used to refer to this model.
+
+    Wright-Fisher simulations are performed very similarly to coalescent
+    simulations, with all parameters denoting the same quantities in both
+    models. Because events occur at discrete times however, the order in which
+    they occur matters. Each generation consists of the following ordered
+    events:
+
+    - Migration events. As in the Hudson coalescent, these move single extant
+      lineages between populations. Because migration events occur before
+      lineages choose parents, migrant lineages choose parents from their new
+      population in the same generation.
+    - Demographic events. All events with `previous_generation < event_time <=
+      current_generation` are carried out here.
+    - Lineages draw parents. Each (monoploid) extant lineage draws a parent
+      from their current population.
+    - Diploid recombination. Each parent is diploid, so all child lineages
+      recombine back-and-forth into the same two parental genome copies. These
+      become two independent lineages in the next generation.
+    - Historical sampling events. All historical samples with
+      `previous_generation < sample_time <= current_generation` are inserted.
+
     """
     name = 'dtwf'
 
@@ -1136,7 +1285,7 @@ class ParametricSimulationModel(SimulationModel):
     The superclass of simulation models that require extra parameters.
     """
     def get_ll_representation(self):
-        d = super(ParametricSimulationModel, self).get_ll_representation()
+        d = super().get_ll_representation()
         d.update(self.__dict__)
         return d
 
@@ -1147,8 +1296,8 @@ class BetaCoalescent(ParametricSimulationModel):
 
     # TODO what is a meaningful value for this parameter? Ideally, the default
     # would be the equivalent of the Kingman coalescent or something similar.
-    def __init__(self, population_size=1, alpha=1.5, truncation_point=None):
-        self.population_size = population_size
+    def __init__(self, reference_size=1, alpha=1.5, truncation_point=None):
+        self.reference_size = reference_size
         self.alpha = alpha
         if truncation_point is None:
             truncation_point = sys.float_info.max
@@ -1160,10 +1309,26 @@ class DiracCoalescent(ParametricSimulationModel):
     name = "dirac"
 
     # TODO What is a meaningful default for this value? See above.
-    def __init__(self, population_size=1, psi=0.5, c=10.0):
-        self.population_size = population_size
+    def __init__(self, reference_size=1, psi=0.5, c=10.0):
+        self.reference_size = reference_size
         self.psi = psi
         self.c = c
+
+
+class SweepGenicSelection(ParametricSimulationModel):
+    # TODO document
+    name = "sweep_genic_selection"
+
+    # TODO: sensible defaults for some of these params?
+    def __init__(
+            self, position, start_frequency, end_frequency, alpha, dt,
+            reference_size=1):
+        self.reference_size = reference_size
+        self.position = position
+        self.start_frequency = start_frequency
+        self.end_frequency = end_frequency
+        self.alpha = alpha
+        self.dt = dt
 
 
 class PopulationParameters(object):
@@ -1198,6 +1363,20 @@ class Epoch(object):
         return repr(self.__dict__)
 
 
+def _matrix_exponential(A):
+    """
+    Returns the matrix exponential of A.
+    https://en.wikipedia.org/wiki/Matrix_exponential
+    Note: this is not a general purpose method and is only intended for use within
+    msprime.
+    """
+    d, Y = np.linalg.eig(A)
+    Yinv = np.linalg.pinv(Y)
+    D = np.diag(np.exp(d))
+    B = np.matmul(Y, np.matmul(D, Yinv))
+    return np.real_if_close(B, tol=1000)
+
+
 class DemographyDebugger(object):
     """
     A class to facilitate debugging of population parameters and migration
@@ -1205,7 +1384,10 @@ class DemographyDebugger(object):
     """
     def __init__(
             self, Ne=1, population_configurations=None, migration_matrix=None,
-            demographic_events=[]):
+            demographic_events=None, model='hudson'):
+        if demographic_events is None:
+            demographic_events = []
+        self.demographic_events = demographic_events
         self._precision = 3
         # Make sure that we have a sample size of at least 2 so that we can
         # initialise the simulator.
@@ -1218,14 +1400,17 @@ class DemographyDebugger(object):
             for pop_config in population_configurations:
                 pop_config.sample_size = 2
         simulator = simulator_factory(
-            sample_size=sample_size, Ne=Ne,
+            sample_size=sample_size, model=model, Ne=Ne,
             population_configurations=population_configurations,
             migration_matrix=migration_matrix,
             demographic_events=demographic_events)
-        # TODO implement the model change events here.
+        if len(simulator.model_change_events) > 0:
+            raise ValueError(
+                "Model changes not currently supported by the DemographyDebugger. "
+                "Please open an issue on GitHub if this feature would be useful to you")
         assert len(simulator.model_change_events) == 0
-        self._make_epochs(
-            simulator, sorted(demographic_events, key=lambda e: e.time))
+        self._make_epochs(simulator, sorted(demographic_events, key=lambda e: e.time))
+        self.simulation_model = simulator.model
 
         if population_configurations is not None:
             # Restore the saved sample sizes.
@@ -1235,6 +1420,7 @@ class DemographyDebugger(object):
 
     def _make_epochs(self, simulator, demographic_events):
         self.epochs = []
+        self.num_populations = simulator.num_populations
         ll_sim = simulator.create_ll_instance()
         N = simulator.num_populations
         start_time = 0
@@ -1317,6 +1503,7 @@ class DemographyDebugger(object):
         """
         Prints a summary of the history of the populations.
         """
+        print("Model = ", self.simulation_model, file=output)
         for epoch in self.epochs:
             if len(epoch.demographic_events) > 0:
                 print("Events @ generation {}".format(epoch.start_time), file=output)
@@ -1328,3 +1515,327 @@ class DemographyDebugger(object):
             print("=" * len(s), file=output)
             self._print_populations(epoch, output)
             print(file=output)
+
+    def population_size_trajectory(self, steps):
+        """
+        This function returns an array of per-population effective population sizes,
+        as defined by the demographic model. These are the `initial_size`
+        parameters of the model, modified by any population growth rates.
+        The sizes are computed at the time points given by `steps`.
+
+        :param list steps: List of times ago at which the population
+            size will be computed.
+        :return: Returns a numpy array of population sizes, with one column per
+            population, whose [i,j]th entry is the size of population
+            j at time steps[i] ago.
+        """
+        num_pops = self.num_populations
+        N_t = np.zeros([len(steps), num_pops])
+        for j, t in enumerate(steps):
+            N, _ = self._pop_size_and_migration_at_t(t)
+            N_t[j] = N
+        return N_t
+
+    def mean_coalescence_time(
+            self, num_samples, min_pop_size=1, steps=None, rtol=0.005, max_iter=12):
+        """
+        Compute the mean time until coalescence between lineages of two samples drawn
+        from the sample configuration specified in `num_samples`. This is done using
+        :meth:`coalescence_rate_trajectory
+        <.DemographyDebugger.coalescence_rate_trajectory>`
+        to compute the probability that the lineages have not yet coalesced by time `t`,
+        and using these to approximate :math:`E[T] = \\int_t^\\infty P(T > t) dt`,
+        where :math:`T` is the coalescence time. See
+        :meth:`coalescence_rate_trajectory
+        <.DemographyDebugger.coalescence_rate_trajectory>`
+        for more details.
+
+        To compute this, an adequate time discretization must be arrived at
+        by iteratively extending or refining the current discretization.
+        Debugging information about numerical convergence of this procedure is
+        logged using the Python :mod:`logging` infrastructure. To make it appear, using
+        the :mod:`daiquiri` module, do for instance::
+
+            import daiquiri
+
+            daiquiri.setup(level="DEBUG")
+            debugger.mean_coalescence_time([2])
+
+        will print this debugging information to stderr. Briefly, this outputs
+        iteration number, mean coalescence time, maximum difference in probabilty
+        of not having coalesced yet, difference to last coalescence time,
+        probability of not having coalesced by the final time point, and
+        whether the last iteration was an extension or refinement.
+
+        :param list num_samples: A list of the same length as the number
+            of populations, so that `num_samples[j]` is the number of sampled
+            chromosomes in subpopulation `j`.
+        :param int min_pop_size: See :meth:`coalescence_rate_trajectory
+            <.DemographyDebugger.coalescence_rate_trajectory>`.
+        :param list steps: The time discretization to start out with (by default,
+            picks something based on epoch times).
+        :param float rtol: The relative tolerance to determine mean coalescence time
+            to (used to decide when to stop subdividing the steps).
+        :param int max_iter: The maximum number of times to subdivide the steps.
+        :return: The mean coalescence time (a number).
+        :rtype: float
+        """
+
+        def mean_time(steps, P):
+            # Mean is int_0^infty P(T > t) dt, which we estimate by discrete integration
+            # assuming that f(t) = P(T > t) is piecewise exponential:
+            # if f(u) = a exp(bu) then b = log(f(t)/f(s)) / (t-s) for each s < t, so
+            # \int_s^t f(u) du = (a/b) \int_s^t exp(bu) b du = (a/b)(exp(bt) - exp(bs))
+            #    = (t - s) * (f(t) - f(s)) / log(f(t) / f(s))
+            # unless b = 0, of course.
+            assert steps[0] == 0
+            dt = np.diff(steps)
+            dP = np.diff(P)
+            dlogP = np.diff(np.log(P))
+            nz = np.logical_and(dP < 0, P[1:]*P[:-1] > 0)
+            const = (dP == 0)
+            return (np.sum(dt[const] * (P[:-1])[const])
+                    + np.sum(dt[nz] * dP[nz] / dlogP[nz]))
+
+        if steps is None:
+            last_N = max(self.population_size_history[:, self.num_epochs - 1])
+            last_epoch = max(self.epoch_times)
+            steps = sorted(list(set(np.linspace(0, last_epoch + 12 * last_N,
+                                                101)).union(set(self.epoch_times))))
+        p_diff = m_diff = np.inf
+        last_P = np.inf
+        step_type = "none"
+        n = 0
+        logger.debug(
+            "iter    mean    P_diff    mean_diff last_P    adjust_type"
+            "num_steps  last_step")
+        # The factors of 20 here are probably not optimal: clearly, we need to
+        # compute P accurately, but there's no good reason for this stopping rule.
+        # If populations have picewise constant size then we shouldn't need this:
+        # setting steps equal to the epoch boundaries should suffice; while if
+        # there is very fast exponential change in some epochs caution is needed.
+        while n < max_iter and (last_P > rtol or p_diff > rtol/20 or m_diff > rtol/20):
+            last_steps = steps
+            _, P1 = self.coalescence_rate_trajectory(
+                            steps=last_steps, num_samples=num_samples,
+                            min_pop_size=min_pop_size,
+                            double_step_validation=False)
+            m1 = mean_time(last_steps, P1)
+            if last_P > rtol:
+                step_type = "extend"
+                steps = np.concatenate([
+                    steps,
+                    np.linspace(steps[-1], steps[-1] * 1.2, 20)[1:]])
+            else:
+                step_type = "refine"
+                inter = steps[:-1] + np.diff(steps)/2
+                steps = np.concatenate([steps, inter])
+                steps.sort()
+            _, P2 = self.coalescence_rate_trajectory(
+                            steps=steps, num_samples=num_samples,
+                            min_pop_size=min_pop_size,
+                            double_step_validation=False)
+            m2 = mean_time(steps, P2)
+            keep_steps = np.in1d(steps, last_steps)
+            p_diff = max(np.abs(P1 - P2[keep_steps]))
+            m_diff = np.abs(m1 - m2)/m2
+            last_P = P2[-1]
+            n += 1
+            # Use the old-style string formatting as this is the logging default
+            logger.debug(
+                "%d %g %g %g %g %s %d %d",
+                n, m2, p_diff, m_diff, last_P, step_type, len(steps), max(steps))
+
+        if n == max_iter:
+            raise ValueError("Did not converge on an adequate discretisation: "
+                             "Increase max_iter or rtol. Consult the log for "
+                             "debugging information")
+        return m2
+
+    def coalescence_rate_trajectory(
+            self, steps, num_samples, min_pop_size=1, double_step_validation=True):
+        """
+        This function will calculate the mean coalescence rates and proportions
+        of uncoalesced lineages between the lineages of the sample
+        configuration provided in `num_samples`, at each of the times ago
+        listed by steps, in this demographic model. The coalescence rate at
+        time t in the past is the average rate of coalescence of
+        as-yet-uncoalesed lineages, computed as follows: let :math:`p(t)` be
+        the probability that the lineages of a randomly chosen pair of samples
+        has not yet coalesced by time :math:`t`, let :math:`p(z,t)` be the
+        probability that the lineages of a randomly chosen pair of samples has
+        not yet coalesced by time :math:`t` *and* are both in population
+        :math:`z`, and let :math:`N(z,t)` be the diploid effective population
+        size of population :math:`z` at time :math:`t`. Then the mean
+        coalescence rate at time :math:`t` is :math:`r(t) = (\\sum_z p(z,t) /
+        (2 * N(z,t)) / p(t)`.
+
+        The computation is done by approximating population size trajectories
+        with piecewise constant trajectories between each of the steps. For
+        this to be accurate, the distance between the steps must be small
+        enough so that (a) short epochs (e.g., bottlenecks) are not missed, and
+        (b) populations do not change in size too much over that time, if they
+        are growing or shrinking. This function optionally provides a simple
+        check of this approximation by recomputing the coalescence rates on a
+        grid of steps twice as fine and throwing a warning if the resulting
+        values do not match to a relative tolerance of 0.001.
+
+        :param list steps: The times ago at which coalescence rates will be computed.
+        :param list num_samples: A list of the same length as the number
+            of populations, so that `num_samples[j]` is the number of sampled
+            chromosomes in subpopulation `j`.
+        :param int min_pop_size: The smallest allowed population size during
+            computation of coalescent rates (i.e., coalescence rates are actually
+            1 / (2 * max(min_pop_size, N(z,t))). Spurious very small population sizes
+            can occur in models where populations grow exponentially but are unused
+            before some time in the past, and lead to floating point error.
+            This should be set to a value smaller than the smallest
+            desired population size in the model.
+        :param bool double_step_validation: Whether to perform the check that
+            step sizes are sufficiently small, as described above. This is highly
+            recommended, and will take at most four times the computation.
+        :return: A tuple of arrays whose jth elements, respectively, are the
+            coalescence rate at the jth time point (denoted r(t[j]) above),
+            and the probablility that a randomly chosen pair of lineages has
+            not yet coalesced (denoted p(t[j]) above).
+        :rtype: (numpy.array, numpy.array)
+        """
+        num_pops = self.num_populations
+        if not len(num_samples) == num_pops:
+            raise ValueError(
+                "`num_samples` must have the same length as the number of populations")
+        steps = np.array(steps)
+        if not np.all(np.diff(steps) > 0):
+            raise ValueError("`steps` must be a sequence of increasing times.")
+        if np.any(steps < 0):
+            raise ValueError("`steps` must be non-negative")
+        r, p_t = self._calculate_coalescence_rate_trajectory(
+                        steps=steps,
+                        num_samples=num_samples,
+                        min_pop_size=min_pop_size)
+        if double_step_validation:
+            inter = steps[:-1] + np.diff(steps)/2
+            double_steps = np.concatenate([steps, inter])
+            double_steps.sort()
+            rd, p_td = self._calculate_coalescence_rate_trajectory(
+                              steps=double_steps,
+                              num_samples=num_samples,
+                              min_pop_size=min_pop_size)
+            assert np.all(steps == double_steps[::2])
+            r_prediction_close = np.allclose(r, rd[::2], rtol=1e-3)
+            p_prediction_close = np.allclose(p_t, p_td[::2], rtol=1e-3)
+            if not (r_prediction_close and p_prediction_close):
+                warnings.warn(
+                    "Doubling the number of steps has resulted in different "
+                    " predictions, please re-run with smaller step sizes to ensure "
+                    " numerical accuracy.")
+        return r, p_t
+
+    def _calculate_coalescence_rate_trajectory(self, steps, num_samples, min_pop_size):
+        num_pops = self.num_populations
+        P = np.zeros([num_pops**2, num_pops**2])
+        IA = np.array(range(num_pops**2)).reshape([num_pops, num_pops])
+        Identity = np.eye(num_pops)
+        for x in range(num_pops):
+            for y in range(num_pops):
+                P[IA[x, y], IA[x, y]] = num_samples[x] * (num_samples[y] - (x == y))
+        P = P / np.sum(P)
+        # add epoch breaks if not there already but remember which steps they are
+        epoch_breaks = list(set([0.0] + [t for t in self.epoch_times
+                                         if t not in steps]))
+        steps_b = np.concatenate([steps, epoch_breaks])
+        ix = np.argsort(steps_b)
+        steps_b = steps_b[ix]
+        keep_steps = np.concatenate([np.repeat(True, len(steps)),
+                                     np.repeat(False, len(epoch_breaks))])[ix]
+        assert np.all(steps == steps_b[keep_steps])
+        mass_migration_objects = []
+        mass_migration_times = []
+        for demo in self.demographic_events:
+            if type(demo) == MassMigration:
+                mass_migration_objects.append(demo)
+                mass_migration_times.append(demo.time)
+        num_steps = len(steps_b)
+        # recall that steps_b[0] = 0.0
+        r = np.zeros(num_steps)
+        p_t = np.zeros(num_steps)
+        for j in range(num_steps - 1):
+            time = steps_b[j]
+            dt = steps_b[j + 1] - steps_b[j]
+            N, M = self._pop_size_and_migration_at_t(time)
+            C = np.zeros([num_pops**2, num_pops**2])
+            for idx in range(num_pops):
+                C[IA[idx, idx], IA[idx, idx]] = 1 / (2 * max(min_pop_size, N[idx]))
+            dM = np.diag([sum(s) for s in M])
+            if time in mass_migration_times:
+                idx = mass_migration_times.index(time)
+                a = mass_migration_objects[idx].source
+                b = mass_migration_objects[idx].dest
+                p = mass_migration_objects[idx].proportion
+                S = np.eye(num_pops**2, num_pops**2)
+                for x in range(num_pops):
+                    if x == a:
+                        S[IA[a, a], IA[a, b]] = S[IA[a, a], IA[b, a]] = p * (1 - p)
+                        S[IA[a, a], IA[b, b]] = p ** 2
+                        S[IA[a, a], IA[a, a]] = (1 - p) ** 2
+                    else:
+                        S[IA[x, a], IA[x, b]] = S[IA[a, x], IA[b, x]] = p
+                        S[IA[x, a], IA[x, a]] = S[IA[a, x], IA[a, x]] = 1 - p
+                P = np.matmul(P, S)
+            p_t[j] = np.sum(P)
+            r[j] = np.sum(np.matmul(P, C)) / np.sum(P)
+            G = (np.kron(M - dM, Identity) + np.kron(Identity, M - dM)) - C
+            P = np.matmul(P, _matrix_exponential(dt * G))
+        p_t[num_steps - 1] = np.sum(P)
+        r[num_steps - 1] = np.sum(np.matmul(P, C)) / np.sum(P)
+        return r[keep_steps], p_t[keep_steps]
+
+    def _pop_size_and_migration_at_t(self, t):
+        """
+        Returns a tuple (N, M) of population sizes (N) and migration rates (M) at
+        time t ago.
+
+        Note: this isn't part of the external API as it is be better to provide
+        separate methods to access the population size and migration rates, and
+        needing both together is specialised for internal calculations.
+
+        :param float t: The time ago.
+        :return: A tuple of arrays, of the same form as the population sizes and
+            migration rate arrays of the demographic model.
+        """
+        j = 0
+        while self.epochs[j].end_time <= t:
+            j += 1
+        N = self.population_size_history[:, j]
+        for i, pop in enumerate(self.epochs[j].populations):
+            s = t - self.epochs[j].start_time
+            g = pop.growth_rate
+            N[i] *= np.exp(-1 * g * s)
+        return N, self.epochs[j].migration_matrix
+
+    @property
+    def population_size_history(self):
+        """
+        Returns a (num_pops, num_epochs) numpy array giving the starting population size
+        for each population in each epoch.
+        """
+        num_pops = len(self.epochs[0].populations)
+        pop_size = np.zeros((num_pops, len(self.epochs)))
+        for j, epoch in enumerate(self.epochs):
+            for k, pop in enumerate(epoch.populations):
+                pop_size[k, j] = epoch.populations[k].start_size
+        return pop_size
+
+    @property
+    def epoch_times(self):
+        """
+        Returns array of epoch times defined by the demographic model
+        """
+        return np.array([x.start_time for x in self.epochs])
+
+    @property
+    def num_epochs(self):
+        """
+        Returns the number of epochs defined by the demographic model.
+        """
+        return len(self.epochs)

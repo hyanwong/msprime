@@ -21,21 +21,19 @@ Msprime is a reimplementation of Hudson's classical ms simulator for
 modern datasets.
 """
 # flake8: NOQA
-from __future__ import print_function
-from __future__ import division
+import tskit
 
 # Compatibility layer for old code using the tskit API exported by msprime.
-
-# These are deprecated in tskit now; should use tskit.NULL instead.
-NULL_NODE = -1
-NULL_POPULATION = -1
-NULL_INDIVIDUAL = -1
-NULL_MUTATION = -1
+NULL_NODE = tskit.NULL
+NULL_POPULATION = tskit.NULL
+NULL_INDIVIDUAL = tskit.NULL
+NULL_MUTATION = tskit.NULL
 
 from tskit import (
     Individual, Node, Edge, Site, Mutation, Migration, Population,
     Variant, Edgeset, Provenance)
-from tskit import SparseTree, TreeSequence
+from tskit import Tree as SparseTree  # Rename SparseTree to Tree in tskit
+from tskit import TreeSequence
 from tskit import (
     IndividualTable, NodeTable, EdgeTable, SiteTable, MutationTable,
     MigrationTable, PopulationTable, ProvenanceTable, TableCollection)
@@ -52,3 +50,4 @@ from msprime.provenance import __version__
 from msprime.simulations import *
 from msprime.exceptions import *
 from msprime.mutations import *
+from msprime.likelihood import *

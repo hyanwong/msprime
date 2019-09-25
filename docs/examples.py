@@ -1,9 +1,6 @@
 """
 The examples used in the tutorial section.
 """
-from __future__ import print_function
-from __future__ import division
-
 import os
 import sys
 sys.path.insert(0, os.path.abspath('..'))
@@ -414,6 +411,23 @@ def simulate_from_example():
         print(tree.draw(format="unicode"))
 
 
+def full_arg_example():
+    ts = msprime.simulate(
+        sample_size=5, recombination_rate=0.1, record_full_arg=True,
+        random_seed=42)
+    print(ts.tables.nodes)
+    print()
+    for tree in ts.trees():
+        print("interval:", tree.interval)
+        print(tree.draw(format="unicode"))
+
+def hybrid_sim_example():
+    ts = msprime.simulate(
+        sample_size=6, Ne=1000, model="dtwf", random_seed=2,
+        demographic_events=[
+            msprime.SimulationModelChange(time=500, model="hudson")])
+    print(ts.tables.nodes)
+
 
 
 
@@ -431,4 +445,6 @@ if __name__ == "__main__":
     # variable_recomb_example()
     # ld_matrix_example()
     # threads_example()
-    simulate_from_example()
+    # simulate_from_example()
+    # full_arg_example()
+    hybrid_sim_example()

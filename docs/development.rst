@@ -13,19 +13,27 @@ please open an `issue <http://github.com/tskit-dev/msprime/issues>`_ or
 Quickstart
 **********
 
-- Make a fork of the msprime repo on `GitHub <github.com/tskit-dev/msprime>`_
-- Clone your fork into a local directory.
+- Make a fork of the msprime repo on `GitHub <http://github.com/tskit-dev/msprime>`_
+- Clone your fork into a local directory, making sure that the **submodules
+  are correctly initialised**::
+
+  $ git clone git@github.com:tskit-dev/msprime.git --recurse-submodules
+
+  For an already checked out repo, the submodules can be initialised using::
+
+  $ git submodule update --init --recursive
+
 - Install the :ref:`basic requirements <sec_installation_system_requirements>`.
 - Install the Python development requirements using ``pip install -r requirements/development.txt``.
-- Build the low level module by running ``make`` in the project root. If you
-  are using Python 2.7, run ``make ext2`` and if you are using Python 3.x,
-  run ``make ext3``. Python 3.x is the default if no arguments are provided.
-- Run the tests to ensure everything has worked: ``python -m nose -vs``. These should
+- Build the low level module by running ``make`` in the project root.
+- Run the tests to ensure everything has worked: ``python3 -m nose -vs``. These should
   all pass.
 - Make your changes in a local branch, and open a pull request on GitHub when you
   are ready. Please make sure that (a) the tests pass before you open the PR; and
   (b) your code passes PEP8 checks (see below for a git commit hook to ensure this
   happens automatically) before opening the PR.
+- See the `tskit documentation <https://tskit.readthedocs.io/en/latest/development.html#github-workflow>`_
+  for more details on the recommended GitHub workflow.
 
 ****************************
 Continuous integration tests
@@ -43,8 +51,7 @@ combinations of tests on different platforms:
    are run, coverage statistics calculated using `CodeCov <https://codecov.io/gh>`__,
    and the documentation built.
 
-3. `AppVeyor <https://www.appveyor.com/>`_ Runs Python tests on 32 and 64 bit
-   Windows using conda.
+3. `AppVeyor <https://www.appveyor.com/>`_ Runs Python tests on Windows using conda.
 
 +++++++++++++++++++++++++++++++++++++++++++++++++
 Running tests on multiple Python versions locally
@@ -95,7 +102,7 @@ High-level Python
 *****************
 
 Throughout this document, we assume that the ``msprime`` package is built and
-run locally _within_ the project directory. That is, ``msprime`` is _not_ installed
+run locally *within* the project directory. That is, ``msprime`` is *not* installed
 into the Python installation using ``pip install -e`` or setuptools `development
 mode <http://setuptools.readthedocs.io/en/latest/setuptools.html#id23>`_. Please
 ensure that you build the low-level module using (e.g.) ``make ext3`` and that
@@ -131,7 +138,7 @@ distribution is though `PyPI <http://pypi.python.org/pypi/msprime>`_, which prov
 canonical source for each release.
 
 A package for `conda <http://conda.io/docs/>`_ is also available on
-`BioConda <bioconda.github.io/recipes/msprime/README.html>`_.
+`conda-forge <https://github.com/conda-forge/msprime-feedstock>`_.
 
 +++++
 Tests
@@ -151,10 +158,10 @@ Interfacing with low-level module
 +++++++++++++++++++++++++++++++++
 
 Much of the high-level Python code only exists to provide a simpler interface to
-the low-level ``_msprime`` module. As such, many objects (such as ``TreeSequence``)
+the low-level ``_msprime`` module. As such, many objects (such as ``RecombinationMap``)
 are really just a shallow layer on top of the corresponding low-level object.
 The convention here is to keep a reference to the low-level object via
-a private instance variable such as ``self._ll_tree_sequence``.
+a private instance variable such as ``self._ll_recombination_map``.
 
 +++++++++++++++++++++++
 Command line interfaces
@@ -168,7 +175,7 @@ first-class executable programs in a cross-platform manner.
 
 There are simple scripts in the root of the project (currently: ``msp_dev.py``,
 ``mspms_dev.py``) which are used for development. For example, to run the
-development version of ``mspms`` use ``python mspms_dev.py``.
+development version of ``mspms`` use ``python3 mspms_dev.py``.
 
 *********
 C Library
@@ -186,15 +193,63 @@ Basics
 
 To compile and develop the C code, a few extra development libraries are needed.
 `Libconfig <http://www.hyperrealm.com/libconfig/>`_ is used for the development CLI
-and `CUnit <http://cunit.sourceforge.net>`_ for unit tests. On Debian/Ubuntu, these
-can be installed using
+and `CUnit <http://cunit.sourceforge.net>`_ for unit tests. We use the
+`meson <https://mesonbuild.com>`_ build system in conjunction with `ninja-build
+<ninja-build.org>`_ to to compile the unit tests and
+development CLI. On Debian/Ubuntu, these can be installed using
 
 .. code-block:: bash
 
-    $ sudo apt-get install libcunit1-dev libconfig-dev
+    $ sudo apt-get install libcunit1-dev libconfig-dev ninja-build
 
-Compile the code locally run ``make`` in the ``lib`` directory.
+Meson is best installed via ``pip``:
 
+.. code-block:: bash
+
+    $ python3 -m pip install meson --user
+
+Meson keeps all compiled binaries in a build directory (this has many advantages
+such as allowing multiple builds with different options to coexist). It depends on
+a ``meson.build`` file which is in the ``lib`` directory. To set up the initial build
+directory, run
+
+.. code-block:: bash
+
+    $ cd lib 
+    $ meson build
+
+.. note::
+   Some Mac OS X users may run into errors like this one when running ``meson build``:
+
+   .. code-block:: bash
+
+      ERROR: Compiler x86_64-apple-darwin13.4.0-clang can not compile programs.
+
+   This is due to setup issues with some versions of ``clang`` (specifically: ``clang_osx-64`` and ``clangxx_osx-64``), which is the default compiler on Mac OS X systems. If you have this problem, you have a few options.
+   One option is to install Xcode. You can then explicitly specify your meson build to use the  ``clang`` compiler from Xcode via its alias, ``gcc``.
+
+   .. code-block:: bash
+
+      $ CC=gcc CXX=g++ meson build
+
+   If you wish, you can remove the problematic default versions of clang from the conda environment completely. Take care, though - this will also remove any packages that depend on them!
+
+   .. code-block:: bash
+
+      $ conda remove clang_osx-64  clangxx_osx-64
+
+To compile the code, ``cd`` into the ``build`` directory and run ``ninja``. All the
+compiled binaries are then in the ``build`` directory:
+
+.. code-block:: bash
+
+    $ cd build
+    $ ninja
+    $ ./tests
+
+The `mesonic <www.vim.org/scripts/script.php?script_id=5378>`_ plugin for vim
+simplifies this process and allows code to be compiled seamlessly within the
+editor.
 
 +++++++++++++++
 Development CLI
@@ -212,15 +267,15 @@ The development CLI is written using `libconfig
 file, and `argtable3 <https://github.com/argtable/argtable3>`_ to parse the
 command line arguments. The ``argtable3`` code is included in the source (but
 not used in the distributed binaries, since this is strictly a development
-tool).
+tool). The source code is in ``dev-tools/dev-cli.c``.
 
-The CLI is run as follows:
+After building, the CLI is run as follows:
 
 .. code-block:: bash
 
-    $ ./main <command> <arguments>
+    $ ./build/dev-cli <command> <arguments>
 
-Running the ``main`` program without arguments will print out a summary of the
+Running the ``dev-cli`` program without arguments will print out a summary of the
 options.
 
 .. warning
@@ -237,12 +292,12 @@ simulation to an output file in the native ``.trees`` format. For example,
 
 .. code-block:: bash
 
-    $ ./main simulate dev.cfg -o out.trees
+    $ ./build/dev-cli simulate dev-tools/example.cfg -o out.trees
 
 The development configuration file describes the simulation that we want to
 run, and uses the
 `libconfig syntax <http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-Files>`_.
-An example is given in the file ``dev.cfg`` which should have sufficient documentation
+An example is given in the file ``dev-tools/example.cfg`` which should have sufficient documentation
 to be self-explanatory.
 
 .. warning
@@ -261,16 +316,13 @@ low-level APIs work correctly over a variety of inputs, and particularly, that
 the tests don't result in leaked memory or illegal memory accesses. The tests should be
 periodically run under valgrind to make sure of this.
 
-Tests are split into ``simulation_tests`` which covers functionality specific to the
-simulation logic, and ``tests`` which covers everything else. To run all the tests
-in a given suite, type ``./tests`` or ``./simulation_tests``.
-To run a specific test, provide this test name as a command line argument,
-e.g.:
+Tests are defined in the ``tests/tests.c`` file. To run all the tests
+in a given suite, type ``./build/tests``. To run a specific test, provide
+this test name as a command line argument, e.g.:
 
 .. code-block:: bash
 
-    $ ./simulation_tests fenwick_tree
-
+    $ ./build/tests test_fenwick
 
 While 100% test coverage is not feasible for C code, we aim to cover all code
 that can be reached. (Some classes of error such as malloc failures
@@ -404,8 +456,8 @@ not intended to be used directly and may change arbitrarily over time.
 
 The usual pattern in the low-level Python API is to define a Python class
 which corresponds to a given "class" in the C API. For example, we define
-a ``TreeSequence`` class, which is essentially a thin wrapper around the
-``tree_sequence_t`` type from the C library.
+a ``RecombinationMap`` class, which is essentially a thin wrapper around the
+``recomb_map_t`` type from the C library.
 
 The ``_msprimemodule.c`` file follows the standard conventions given in the
 `Python documentation <https://docs.python.org/3.6/extending/index.html>`_.
@@ -421,11 +473,10 @@ for use in the current working directory, run
 
 .. code-block:: bash
 
-    $ python setup.py build_ext --inplace
+    $ python3 setup.py build_ext --inplace
 
 A development Makefile is also provided in the project root, so that running
-``make ext2`` or ``make ext3`` should build the extension module for either
-Python 2 or Python 3.
+``make`` should build the extension module.
 
 ++++++++++++++++++++++++
 Testing for memory leaks
@@ -454,7 +505,7 @@ this script using:
 
 .. code-block:: bash
 
-    $ python verification.py
+    $ python3 verification.py
 
 
 The statistical tests depend on compiled programs in the ``data`` directory.
@@ -481,6 +532,57 @@ QQ-plots of the statistics in question comparing ``ms`` and ``msprime``.
 There are also several "analytical" tests, which compare the distributions of
 values from ``msprime`` with analytical expectations.
 
+****************
+Containerization
+****************
+
+This repo is integrated with Dockerhub and the Docker image will be automatically
+built upon pushes to master on Dockerhub.
+
+A Docker image can also be locally built with the following steps.
+
+Build image:
+
+.. code-block:: bash
+
+    $ sudo docker build -t tskit/msprime .
+
+Enter Docker container:
+
+.. code-block:: bash
+
+    $ sudo docker run -it tskit/msprime
+
+Alternatively, msprime can be executed via the Docker container:
+
+.. code-block:: bash
+
+    $ sudo docker run -it tskit/msprime mspms 10 1 -T
+
+Building Docker images and running Docker containers requires root access.
+If you are on a system and do not have root access, you can pull the Docker image
+and run it as a Singularity container.
+
+To run as a Singularity container, pull the docker image:
+
+.. code-block:: bash
+
+    $ singularity pull docker://tskit/msprime msprime.simg
+
+Enter Singularity container container:
+
+.. code-block:: bash
+
+    $ singularity shell msprime.simg
+
+Or, msprime can be executed via the Singularity container:
+
+.. code-block:: bash
+
+    $ singularity exec msprime.simg mspms 10 1 -T
+
+For more information on Singularity, see https://www.sylabs.io/guides/3.0/user-guide/
+
 *************
 Documentation
 *************
@@ -491,3 +593,16 @@ and contained in the ``docs`` directory. It is written in the
 is deployed automatically to `readthedocs <https://readthedocs.org/>`_. To
 build the documentation locally run ``make`` in the ``docs`` directory.
 This should build the HTML documentation in ``docs/_build/html/``.
+
+
+***************
+Troubleshooting
+***************
+
+- If ``make`` is giving you strange errors, or if tests are failing for
+  strange reasons, try running ``make clean`` in the project root
+  and then rebuilding.
+- Beware of multiple versions of the python library installed by different
+  programs (e.g., pip versus installing locally from source)! In python,
+  ``msprime.__file__`` will tell you the location of the package that is being
+  used.

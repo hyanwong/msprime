@@ -19,9 +19,6 @@
 """
 Test cases for the high level interface to msprime.
 """
-from __future__ import print_function
-from __future__ import division
-
 import datetime
 import json
 import os
@@ -31,13 +28,6 @@ import sys
 import tempfile
 import unittest
 import multiprocessing
-
-try:
-    # We use the zip as iterator functionality here.
-    from future_builtins import zip
-except ImportError:
-    # This fails for Python 3.x, but that's fine.
-    pass
 
 import numpy as np
 
@@ -259,6 +249,90 @@ class TestMultiLocusSimulation(HighLevelTestCase):
             self.assertRaises(TypeError, f, n, 1, 1.0)
 
 
+class TestFullArg(unittest.TestCase):
+    """
+    Tests for recording the full ARG.
+    """
+    def verify(self, sim, multiple_mergers=False):
+        sim.run()
+        tree_sequence = sim.get_tree_sequence()
+        # Check if we have multiple merger somewhere.
+        found = False
+        for edgeset in tree_sequence.edgesets():
+            if len(edgeset.children) > 2:
+                found = True
+                break
+        self.assertEqual(multiple_mergers, found)
+
+        flags = tree_sequence.tables.nodes.flags
+        time = tree_sequence.tables.nodes.time
+        # TODO add checks for migrations.
+        re_nodes = np.where(flags == msprime.NODE_IS_RE_EVENT)[0]
+        ca_nodes = np.where(flags == msprime.NODE_IS_CA_EVENT)[0]
+        coal_nodes = np.where(flags == 0)[0]
+        # There should be two recombination nodes for every event
+        self.assertTrue(np.array_equal(
+            time[re_nodes[::2]],  # Even indexes
+            time[re_nodes[1::2]]))  # Odd indexes
+        self.assertEqual(re_nodes.shape[0] / 2,  sim.num_recombination_events)
+        if not multiple_mergers:
+            self.assertEqual(
+                ca_nodes.shape[0] + coal_nodes.shape[0], sim.num_common_ancestor_events)
+        # After simplification, all the RE and CA nodes should be gone.
+        ts_simplified = tree_sequence.simplify()
+        new_flags = ts_simplified.tables.nodes.flags
+        new_time = ts_simplified.tables.nodes.time
+        self.assertEqual(np.sum(new_flags == msprime.NODE_IS_RE_EVENT), 0)
+        self.assertEqual(np.sum(new_flags == msprime.NODE_IS_CA_EVENT), 0)
+        # All coal nodes from the original should be identical to the originals
+        self.assertTrue(np.array_equal(time[coal_nodes], new_time[new_flags == 0]))
+        self.assertLessEqual(ts_simplified.num_nodes, tree_sequence.num_nodes)
+        self.assertLessEqual(ts_simplified.num_edges, tree_sequence.num_edges)
+        return tree_sequence
+
+    def test_no_recombination(self):
+        rng = msprime.RandomGenerator(1)
+        sim = msprime.simulator_factory(10, random_generator=rng, record_full_arg=True)
+        ts = self.verify(sim)
+        ts_simplified = ts.simplify()
+        t1 = ts.tables
+        t2 = ts_simplified.tables
+        self.assertEqual(t1.nodes, t2.nodes)
+        self.assertEqual(t1.edges, t2.edges)
+
+    def test_recombination_n25(self):
+        rng = msprime.RandomGenerator(10)
+        sim = msprime.simulator_factory(
+            25, recombination_rate=1, record_full_arg=True, random_generator=rng)
+        self.verify(sim)
+
+    def test_recombination_n5(self):
+        rng = msprime.RandomGenerator(10)
+        sim = msprime.simulator_factory(
+            5, recombination_rate=10, record_full_arg=True, random_generator=rng)
+        self.verify(sim)
+
+    def test_recombination_n50(self):
+        rng = msprime.RandomGenerator(100)
+        sim = msprime.simulator_factory(
+            50, recombination_rate=2, record_full_arg=True, random_generator=rng)
+        self.verify(sim)
+
+    def test_recombination_n100(self):
+        rng = msprime.RandomGenerator(100)
+        sim = msprime.simulator_factory(
+            100, recombination_rate=0.2, record_full_arg=True, random_generator=rng)
+        self.verify(sim)
+
+    def test_multimerger(self):
+        rng = msprime.RandomGenerator(1234)
+        sim = msprime.simulator_factory(
+            100, recombination_rate=0.1, record_full_arg=True,
+            random_generator=rng, demographic_events=[
+                msprime.InstantaneousBottleneck(time=0.1, population=0, strength=5)])
+        self.verify(sim, multiple_mergers=True)
+
+
 class TestSimulator(HighLevelTestCase):
     """
     Runs tests on the underlying Simulator object.
@@ -361,6 +435,11 @@ class TestSimulatorFactory(unittest.TestCase):
             with self.assertRaises(ValueError):
                 msprime.simulator_factory(10, length=bad_length)
 
+    def test_num_labels(self):
+        for bad_value in [-1, 0, 0.1]:
+            with self.assertRaises(ValueError):
+                msprime.simulator_factory(10, num_labels=bad_value)
+
     def test_sample_size(self):
         self.assertRaises(ValueError, msprime.simulator_factory)
         self.assertRaises(ValueError, msprime.simulator_factory, 1)
@@ -384,14 +463,14 @@ class TestSimulatorFactory(unittest.TestCase):
             self.assertRaises(ValueError, f, bad_value)
         for Ne in [1, 10, 1e5]:
             sim = f(Ne)
-            self.assertEqual(sim.model.population_size, Ne)
+            self.assertEqual(sim.model.reference_size, Ne)
         # Test the default.
         sim = msprime.simulator_factory(10)
+        self.assertEqual(sim.model.reference_size, 1)
 
     def test_population_configurations(self):
         def f(configs):
-            return msprime.simulator_factory(
-                population_configurations=configs)
+            return msprime.simulator_factory(population_configurations=configs)
         for bad_type in [10, ["sdf"], "sdfsd"]:
             self.assertRaises(TypeError, f, bad_type)
         # Just test the basic equalities here. The actual
@@ -486,8 +565,7 @@ class TestSimulatorFactory(unittest.TestCase):
     def test_demographic_events(self):
         for bad_type in ["sdf", 234, [12], [None]]:
             self.assertRaises(
-                TypeError, msprime.simulator_factory, 2,
-                demographic_events=bad_type)
+                TypeError, msprime.simulator_factory, 2, demographic_events=bad_type)
         # TODO test for bad values.
 
     def test_recombination_rate(self):
@@ -542,6 +620,18 @@ class TestSimulatorFactory(unittest.TestCase):
             ll_sim = sim.create_ll_instance()
             self.assertEqual(ll_sim.get_num_loci(), recomb_map.get_num_loci())
 
+    def test_zero_recombination_map(self):
+        # test that beginning and trailing zero recombination regions in the
+        # recomb map are included in the sequence
+        for n in range(3, 10):
+            positions = list(range(n))
+            rates = [0.0, 0.2] + [0.0] * (n - 2)
+            recomb_map = msprime.RecombinationMap(positions, rates)
+            ts = msprime.simulate(10, recombination_map=recomb_map)
+            self.assertEqual(ts.sequence_length, n - 1)
+            self.assertEqual(min(ts.tables.edges.left), 0.0)
+            self.assertEqual(max(ts.tables.edges.right), n - 1.0)
+
     def test_combining_recomb_map_and_rate_length(self):
         recomb_map = msprime.RecombinationMap([0, 1], [1, 0])
         self.assertRaises(
@@ -554,6 +644,20 @@ class TestSimulatorFactory(unittest.TestCase):
             ValueError, msprime.simulator_factory, 10,
             recombination_map=recomb_map, length=1,
             recombination_rate=1)
+
+    def test_mean_recombination_rate(self):
+        # Some quick sanity checks.
+        recomb_map = msprime.RecombinationMap([0, 1], [1, 0])
+        mean_rr = recomb_map.mean_recombination_rate
+        self.assertEqual(mean_rr, 1.0)
+
+        recomb_map = msprime.RecombinationMap([0, 1, 2], [1, 0, 0])
+        mean_rr = recomb_map.mean_recombination_rate
+        self.assertEqual(mean_rr, 0.5)
+
+        recomb_map = msprime.RecombinationMap([0, 1, 2], [0, 0, 0])
+        mean_rr = recomb_map.mean_recombination_rate
+        self.assertEqual(mean_rr, 0.0)
 
     def test_sample_combination_errors(self):
         # Make sure that the various ways we can specify the samples
@@ -690,6 +794,17 @@ class TestSimulateInterface(unittest.TestCase):
         self.assertEqual(ts.get_sample_size(), n)
         self.assertGreater(ts.get_num_trees(), 1)
         self.assertEqual(ts.get_num_mutations(), 0)
+
+    def test_num_labels(self):
+        # Running simulations with different numbers of labels in the default
+        # setting should have no effect.
+        tables = [
+            msprime.simulate(10, num_labels=num_labels, random_seed=1).tables
+            for num_labels in range(1, 5)]
+        for t in tables:
+            t.provenances.clear()
+        for t in tables:
+            self.assertEqual(t, tables[0])
 
 
 # Convenience method for getting seeds in a subprocess.

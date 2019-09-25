@@ -9,14 +9,13 @@ pre-built binary packages using :ref:`sec_installation_conda` or
 by compiling locally using :ref:`sec_installation_pip`. We recommend using ``conda``
 for most users, although ``pip`` can be more convenient in certain cases.
 
-
 .. _sec_installation_requirements:
 
 ============
 Requirements
 ============
 
-Msprime requires Python 2.7 or Python 3.3+
+Msprime requires Python 3.4+
 and the `GNU Scientific Library <http://www.gnu.org/software/gsl/>`_.
 GSL can either be installed automatically as part of a
 :ref:`sec_installation_conda` installation **or** via system packages
@@ -36,10 +35,7 @@ conda
 
 Pre-built binary packages for ``msprime`` are available through
 `conda <https://conda.io/docs/>`_, and built using `conda-forge <https://conda-forge.org/>`_.
-Packages for Python 2.7, 3.5 and 3.6 are available for Linux and OSX.
-For Windows, only Python 3.5 and 3.6 are supported.
-
-We strongly recommend using Python 3.
+Packages for Python 3.6 and 3.7 are available for Linux, OSX and Windows.
 
 ***********
 Quick Start
@@ -205,9 +201,9 @@ Installation
 
 We can install ``msprime`` easily using pip::
 
-    $ python -m pip install msprime
+    $ python3 -m pip install msprime
 
-(It is generally better to use ``python -m pip`` rather than call ``pip``
+(It is generally better to use ``python3 -m pip`` rather than call ``pip``
 directly since this allows you to control which installation of Python the
 package is installed to.) This will work in most cases, once the GSL has been
 installed. See below for platform specific build instructions when this fails.
@@ -215,7 +211,7 @@ installed. See below for platform specific build instructions when this fails.
 If you do not have root access to your machine, you can install
 ``msprime`` into your local Python installation as follows::
 
-    $ python -m pip install msprime --user
+    $ python3 -m pip install msprime --user
 
 To use the ``mspms`` program you must ensure
 that the ``~/.local/bin`` directory is in your ``PATH``, or
@@ -225,7 +221,7 @@ simply run it using::
 
 To uninstall ``msprime``, simply run::
 
-    $ python -m pip uninstall msprime
+    $ python3 -m pip uninstall msprime
 
 
 .. _sec_pip_platform_specific_installation:
@@ -303,3 +299,19 @@ Now install the dependencies and msprime::
 Check if it works::
 
     $ mspms 10 1 -T
+
+
+==============
+Python 2 users
+==============
+
+Msprime no longer supports Python 2, and therefore those wishing to continue
+using Python 2.7 will not be able to take advantage of newer features. We
+recommend using msprime version 0.6.2 if you need to work with Python 2.7::
+
+$ python -m pip install msprime==0.6.2
+
+or ::
+
+$ conda install msprime==0.6.2
+

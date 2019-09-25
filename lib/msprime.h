@@ -26,16 +26,12 @@
 
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_integration.h>
+#include <tskit.h>
 
 #include "util.h"
 #include "avl.h"
 #include "fenwick.h"
 #include "object_heap.h"
-#include "tskit/tsk_tables.h"
-#include "tskit/tsk_trees.h"
-
-/* #include "tables.h" */
-/* #include "trees.h" */
 
 #define MSP_MODEL_HUDSON 0
 #define MSP_MODEL_SMC 1
@@ -43,7 +39,16 @@
 #define MSP_MODEL_BETA 3
 #define MSP_MODEL_DIRAC 4
 #define MSP_MODEL_DTWF 5
-#define MSP_MODEL_SINGLE_SWEEP 6
+#define MSP_MODEL_SWEEP 6
+
+/* Exit codes from msp_run to distinguish different reasons for exiting
+ * before coalescence. */
+#define MSP_EXIT_MAX_EVENTS     1
+#define MSP_EXIT_MAX_TIME       2
+
+#define MSP_NODE_IS_RE_EVENT    (1u << 17)
+#define MSP_NODE_IS_CA_EVENT    (1u << 18)
+#define MSP_NODE_IS_MIG_EVENT   (1u << 19)
 
 /* Alphabets for mutation generator */
 #define MSP_ALPHABET_BINARY     0
@@ -123,22 +128,36 @@ typedef struct {
     double c; // constant
 } dirac_coalescent_t;
 
+/* Forward declaration */
+struct _msp_t;
+
 typedef struct {
+    /* TODO document these parameters.*/
+    double start_frequency;
+    double end_frequency;
+    double alpha;
+    double dt;
+} genic_selection_trajectory_t;
+
+typedef struct _sweep_t {
     uint32_t locus;
-    struct {
-        double *allele_frequency;
-        double *time;
-        size_t num_steps;
-    } trajectory;
-} single_sweep_t;
+    union {
+        /* Future trajectory simulation models would go here */
+        genic_selection_trajectory_t genic_selection_trajectory;
+    } trajectory_params;
+    int (*generate_trajectory)(struct _sweep_t *self, struct _msp_t *simulator,
+            size_t *num_steps, double **time, double **allele_frequency);
+    void (*print_state)(struct _sweep_t *self, FILE *out);
+} sweep_t;
 
 typedef struct _simulation_model_t {
     int type;
-    double population_size;
+    /* For coalescent models, the reference population size used to rescale time */
+    double reference_size;
     union {
         beta_coalescent_t beta_coalescent;
         dirac_coalescent_t dirac_coalescent;
-        single_sweep_t single_sweep;
+        sweep_t sweep;
     } params;
     /* If the model allocates memory this function should be non-null. */
     void (*free)(struct _simulation_model_t *model);
@@ -165,6 +184,7 @@ typedef struct _msp_t {
     /* input parameters */
     simulation_model_t model;
     bool store_migrations;
+    bool store_full_arg;
     uint32_t num_samples;
     uint32_t num_loci;
     double recombination_rate;
@@ -211,8 +231,8 @@ typedef struct _msp_t {
     /* We keep an independent segment heap for each label */
     object_heap_t *segment_heap;
     /* The tables used to store the simulation state */
-    tsk_tbl_collection_t *tables;
-    tsk_tbl_collection_position_t from_position;
+    tsk_table_collection_t *tables;
+    tsk_bookmark_t from_position;
     /* edges are buffered in a flat array until they are squashed and flushed */
     tsk_edge_t *buffered_edges;
     size_t num_buffered_edges;
@@ -286,7 +306,7 @@ typedef struct {
 
 int msp_alloc(msp_t *self,
         size_t num_samples, sample_t *samples,
-        recomb_map_t *recomb_map, tsk_tbl_collection_t *from_ts_tables, gsl_rng *rng);
+        recomb_map_t *recomb_map, tsk_table_collection_t *from_ts_tables, gsl_rng *rng);
 int msp_set_start_time(msp_t *self, double start_time);
 int msp_set_simulation_model_hudson(msp_t *self, double population_size);
 int msp_set_simulation_model_smc(msp_t *self, double population_size);
@@ -296,11 +316,12 @@ int msp_set_simulation_model_dirac(msp_t *self, double population_size, double p
     double c);
 int msp_set_simulation_model_beta(msp_t *self, double population_size, double alpha,
         double truncation_point);
-int msp_set_simulation_model_single_sweep(msp_t *self, double population_size,
-        uint32_t locus, size_t num_steps, double *time,
-        double *allele_frequency);
+int msp_set_simulation_model_sweep_genic_selection(msp_t *self, double population_size,
+        double position, double start_frequency, double end_frequency,
+        double alpha, double dt);
 
 int msp_set_store_migrations(msp_t *self, bool store_migrations);
+int msp_set_store_full_arg(msp_t *self, bool store_full_arg);
 int msp_set_num_populations(msp_t *self, size_t num_populations);
 int msp_set_dimensions(msp_t *self, size_t num_populations, size_t num_labels);
 int msp_set_node_mapping_block_size(msp_t *self, size_t block_size);
@@ -350,6 +371,7 @@ double msp_get_time(msp_t *self);
 size_t msp_get_num_samples(msp_t *self);
 size_t msp_get_num_loci(msp_t *self);
 size_t msp_get_num_populations(msp_t *self);
+size_t msp_get_num_labels(msp_t *self);
 size_t msp_get_num_ancestors(msp_t *self);
 size_t msp_get_num_breakpoints(msp_t *self);
 size_t msp_get_num_nodes(msp_t *self);
@@ -361,7 +383,6 @@ size_t msp_get_num_segment_blocks(msp_t *self);
 size_t msp_get_num_common_ancestor_events(msp_t *self);
 size_t msp_get_num_rejected_common_ancestor_events(msp_t *self);
 size_t msp_get_num_recombination_events(msp_t *self);
-
 
 int recomb_map_alloc_uniform(recomb_map_t *self, uint32_t num_loci,
         double sequence_length, double rate);
@@ -387,7 +408,7 @@ int mutgen_alloc(mutgen_t *self, double mutation_rate, gsl_rng *rng,
         int alphabet, size_t mutation_block_size);
 int mutgen_set_time_interval(mutgen_t *self, double start_time, double end_time);
 int mutgen_free(mutgen_t *self);
-int mutgen_generate(mutgen_t *self, tsk_tbl_collection_t *tables, int flags);
+int mutgen_generate(mutgen_t *self, tsk_table_collection_t *tables, int flags);
 void mutgen_print_state(mutgen_t *self, FILE *out);
 
 /* Functions exposed here for unit testing. Not part of public API. */
@@ -395,7 +416,6 @@ double compute_falling_factorial_log(unsigned int  m);
 double compute_dirac_coalescence_rate(unsigned int num_ancestors, double psi, double c);
 int msp_compute_beta_integral(msp_t *self, unsigned int num_ancestors, double alpha, double *result);
 int msp_beta_compute_coalescence_rate(msp_t *self, unsigned int num_ancestors, double *result);
-
 int msp_multi_merger_common_ancestor_event(msp_t *self, double x, avl_tree_t *ancestors, avl_tree_t *Q);
 
 #endif /*__MSPRIME_H__*/
