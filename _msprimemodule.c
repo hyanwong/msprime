@@ -30,6 +30,7 @@
 #include <gsl/gsl_errno.h>
 
 #include "msprime.h"
+#include "likelihood.h"
 
 /* We keep a reference to the gsl_error_handler so it can be restored if needed */
 static gsl_error_handler_t *old_gsl_error_handler;
@@ -77,6 +78,12 @@ static void
 handle_library_error(int err)
 {
     PyErr_SetString(MsprimeLibraryError, msp_strerror(err));
+}
+
+static void
+handle_tskit_library_error(int err)
+{
+    PyErr_SetString(MsprimeLibraryError, tsk_strerror(err));
 }
 
 static void
@@ -2647,14 +2654,15 @@ Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
     double time, initial_size, growth_rate, migration_rate, proportion,
            strength;
     int err, population_id, matrix_index, source, destination;
-    int is_population_parameter_change, is_migration_rate_change,
-        is_mass_migration, is_simple_bottleneck, is_instantaneous_bottleneck;
+    int is_population_parameter_change, is_migration_rate_change, is_mass_migration,
+        is_simple_bottleneck, is_instantaneous_bottleneck, is_census_event;
     PyObject *item, *value, *type;
     PyObject *population_parameter_change_s = NULL;
     PyObject *migration_rate_change_s = NULL;
     PyObject *mass_migration_s = NULL;
     PyObject *simple_bottleneck_s = NULL;
     PyObject *instantaneous_bottleneck_s = NULL;
+    PyObject *census_event_s = NULL;
     PyObject *initial_size_s = NULL;
     PyObject *growth_rate_s = NULL;
 
@@ -2682,6 +2690,10 @@ Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
     }
     instantaneous_bottleneck_s = Py_BuildValue("s", "instantaneous_bottleneck");
     if (instantaneous_bottleneck_s == NULL) {
+        goto out;
+    }
+    census_event_s = Py_BuildValue("s", "census_event");
+    if (census_event_s == NULL) {
         goto out;
     }
     initial_size_s = Py_BuildValue("s", "initial_size");
@@ -2739,6 +2751,11 @@ Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
         is_instantaneous_bottleneck = PyObject_RichCompareBool(
                 type, instantaneous_bottleneck_s, Py_EQ);
         if (is_instantaneous_bottleneck == -1) {
+            goto out;
+        }
+        is_census_event = PyObject_RichCompareBool(
+                type, census_event_s, Py_EQ);
+        if (is_census_event == -1) {
             goto out;
         }
         if (is_population_parameter_change) {
@@ -2822,6 +2839,8 @@ Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
             population_id = (int) PyLong_AsLong(value);
             err = msp_add_instantaneous_bottleneck(self->sim, time, population_id,
                     strength);
+        } else if (is_census_event) {
+            err = msp_add_census_event(self->sim, time);
         } else {
             PyErr_Format(PyExc_ValueError, "Unknown demographic event type");
             goto out;
@@ -4057,6 +4076,50 @@ static PyTypeObject SimulatorType = {
  */
 
 static PyObject *
+msprime_log_likelihood_arg(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *ret = NULL;
+    int err;
+    LightweightTableCollection *tables = NULL;
+    double recombination_rate, Ne, ret_likelihood, rho;
+    static char *kwlist[] = {"tables", "Ne", "recombination_rate", NULL};
+    tsk_treeseq_t ts;
+
+    memset(&ts, 0, sizeof(ts));
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!dd", kwlist,
+            &LightweightTableCollectionType, &tables, &Ne, &recombination_rate)) {
+        goto out;
+    }
+
+    if (recombination_rate <= 0) {
+        PyErr_SetString(PyExc_ValueError, "recombination_rate must be > 0");
+        goto out;
+    }
+
+    /* Note: this will be inefficient here if we're building indexes for large
+     * tables. */
+    err = tsk_treeseq_init(&ts, tables->tables, TSK_BUILD_INDEXES);
+    if (err != 0) {
+        handle_tskit_library_error(err);
+        goto out;
+    }
+    /* Note: this should be done within the library probably because we'll
+     * need to rescale the branch lengths according to Ne also, right?
+     */
+    rho = 4 * Ne * recombination_rate;
+
+    err = msp_log_likelihood_arg(&ts, rho, &ret_likelihood);
+    if (err != 0) {
+        handle_library_error(err);
+        goto out;
+    }
+    ret = Py_BuildValue("d", ret_likelihood);
+out:
+    tsk_treeseq_free(&ts);
+    return ret;
+}
+
+static PyObject *
 msprime_get_gsl_version(PyObject *self)
 {
     return Py_BuildValue("ii", GSL_MAJOR_VERSION, GSL_MINOR_VERSION);
@@ -4079,6 +4142,9 @@ msprime_unset_gsl_error_handler(PyObject *self)
 }
 
 static PyMethodDef msprime_methods[] = {
+    {"log_likelihood_arg", (PyCFunction) msprime_log_likelihood_arg,
+            METH_VARARGS|METH_KEYWORDS,
+            "Computes the log-likelihood of an ARG." },
     {"get_gsl_version", (PyCFunction) msprime_get_gsl_version, METH_NOARGS,
             "Returns the version of GSL we are linking against." },
     {"restore_gsl_error_handler", (PyCFunction) msprime_restore_gsl_error_handler,
@@ -4158,6 +4224,7 @@ PyInit__msprime(void)
     PyModule_AddIntConstant(module, "NODE_IS_CA_EVENT", MSP_NODE_IS_CA_EVENT);
     PyModule_AddIntConstant(module, "NODE_IS_RE_EVENT", MSP_NODE_IS_RE_EVENT);
     PyModule_AddIntConstant(module, "NODE_IS_MIG_EVENT", MSP_NODE_IS_MIG_EVENT);
+    PyModule_AddIntConstant(module, "NODE_IS_CEN_EVENT", MSP_NODE_IS_CEN_EVENT);
 
     /* The function unset_gsl_error_handler should be called at import time,
      * ensuring we capture the value of the handler. However, just in case
