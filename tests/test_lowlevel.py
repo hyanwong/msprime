@@ -24,6 +24,7 @@ import itertools
 import math
 import random
 import unittest
+import numpy as np
 
 import tskit
 
@@ -888,14 +889,62 @@ class TestSimulator(LowLevelTestCase):
             self.assertRaises(TypeError, f, node_mapping_block_size=bad_type)
             self.assertRaises(TypeError, f, start_time=bad_type)
             self.assertRaises(TypeError, f, num_labels=bad_type)
+            self.assertRaises(TypeError, f, gene_conversion_rate=bad_type)
+            self.assertRaises(TypeError, f, gene_conversion_track_length=bad_type)
         # Check for bad values.
         self.assertRaises(_msprime.InputError, f, avl_node_block_size=0)
         self.assertRaises(_msprime.InputError, f, segment_block_size=0)
         self.assertRaises(_msprime.InputError, f, node_mapping_block_size=0)
         self.assertRaises(_msprime.InputError, f, num_labels=0)
         self.assertRaises(_msprime.InputError, f, num_labels=-1)
+        self.assertRaises(_msprime.InputError, f, gene_conversion_rate=-1)
+        # Track length is ignored if gene_conversion_rate is 0
+        self.assertRaises(
+            _msprime.InputError, f, gene_conversion_rate=1,
+            gene_conversion_track_length=-100)
+
         # Check for other type specific errors.
         self.assertRaises(OverflowError, f, avl_node_block_size=2**65)
+
+    def test_pedigree_simulation_model(self):
+        recomb_map = uniform_recombination_map()
+        base_ped = {
+            "individual": np.array([1, 2, 3, 4], dtype=np.int32),
+            "parents": np.array([2, 3, 2, 3, -1, -1, -1, -1],
+                                dtype=np.int32).reshape(-1, 2),
+            "time": np.array([0, 0, 1, 1], dtype=np.float64),
+            "is_sample": np.array([1, 1, 0, 0], dtype=np.uint32)
+        }
+        bad_ped_too_many_samples = base_ped.copy()
+        bad_ped_too_many_samples["is_sample"] = 1
+        bad_ped_bad_inds = base_ped.copy()
+        bad_ped_bad_inds["individual"] = np.array([0, 1, 2, 3], dtype=np.int32),
+        bad_ped_bad_is_sample = base_ped.copy()
+        bad_ped_bad_is_sample["is_sample"] = np.array([0, 1, 0, 0], dtype=np.int32),
+
+        def f(num_samples=4, random_seed=1, model='wf_ped', **kwargs):
+            return _msprime.Simulator(
+                get_samples(num_samples),
+                recomb_map, _msprime.RandomGenerator(random_seed),
+                _msprime.LightweightTableCollection(),
+                model=get_simulation_model(model), **kwargs)
+
+        for bad_type in ["1", [], int, set()]:
+            self.assertRaises(TypeError, f, pedigree=bad_type)
+        for bad_value in [{}]:
+            self.assertRaises(ValueError, f, pedigree=bad_value)
+        for bad_model in ["dtwf", "hudson"]:
+            self.assertRaises(ValueError, f, pedigree=base_ped,
+                              model=bad_model)
+        for bad_ped in [
+                bad_ped_too_many_samples,
+                bad_ped_bad_inds,
+                bad_ped_bad_is_sample]:
+            self.assertRaises(ValueError, f, pedigree=bad_ped)
+        for good_ped in [base_ped]:
+            sim = f(pedigree=good_ped)
+            sim.run()
+            self.assertEqual(sim.get_model(), get_simulation_model("wf_ped"))
 
     def test_num_labels(self):
         recomb_map = uniform_recombination_map()
@@ -1480,6 +1529,26 @@ class TestSimulator(LowLevelTestCase):
             event = get_simple_bottleneck_event(proportion=bad_proportion)
             self.assertRaises(_msprime.InputError, f, [event])
 
+    def test_bad_demographic_event_messages(self):
+        def f(events, num_populations=1):
+            population_configuration = [get_population_configuration(2)] + [
+                get_population_configuration(0)
+                for _ in range(num_populations - 1)]
+            _msprime.Simulator(
+                get_samples(2), uniform_recombination_map(), _msprime.RandomGenerator(1),
+                _msprime.LightweightTableCollection(), demographic_events=events,
+                population_configuration=population_configuration,
+                migration_matrix=get_migration_matrix(num_populations))
+
+        # Make sure we're getting the right index in error message.
+        events = [get_size_change_event(), get_size_change_event(size=-1)]
+        try:
+            f(events)
+        except _msprime.InputError as e:
+            message = str(e)
+        self.assertTrue(
+            message.startswith("Input error in demographic_events[1]"))
+
     def test_unsorted_demographic_events(self):
         event_generators = [
             get_size_change_event, get_growth_rate_change_event,
@@ -1907,6 +1976,54 @@ class TestMutationGenerator(unittest.TestCase):
             mg = _msprime.MutationGenerator(
                 random_generator=rng, mutation_rate=0, alphabet=alphabet)
             self.assertEqual(alphabet, mg.get_alphabet())
+
+    def test_generate_interface(self):
+        rng = _msprime.RandomGenerator(1)
+        mutgen = _msprime.MutationGenerator(rng, 2)
+        tables = _msprime.LightweightTableCollection()
+        for bad_type in [None, [], {}]:
+            self.assertRaises(TypeError, mutgen.generate, bad_type)
+            self.assertRaises(TypeError, mutgen.generate, tables, bad_type)
+        for _ in range(10):
+            tables = _msprime.LightweightTableCollection()
+            mutgen.generate(tables)
+
+    def verify_block_size(self, tables):
+        rng = _msprime.RandomGenerator(1)
+        mutgen = _msprime.MutationGenerator(rng, 2)
+        ll_tables = _msprime.LightweightTableCollection()
+        ll_tables.fromdict(tables.asdict())
+        mutgen.generate(ll_tables, keep=True)
+        after_tables = tskit.TableCollection.fromdict(ll_tables.asdict())
+        self.assertEqual(tables, after_tables)
+
+    def test_keep_mutations_block_size_mutations(self):
+        tables = tskit.TableCollection()
+        tables.sites.add_row(0, "a")
+        for j in range(8192):
+            tables.mutations.add_row(0, node=0, derived_state="b")
+        self.verify_block_size(tables)
+
+    def test_keep_mutations_block_size_ancestral_state(self):
+        tables = tskit.TableCollection()
+        big_alloc = 64 * 1024
+        tables.sites.add_row(0, "a" * big_alloc)
+        self.verify_block_size(tables)
+
+    def test_keep_mutations_block_size_derived_state(self):
+        tables = tskit.TableCollection()
+        tables.sites.add_row(0, "a")
+        big_alloc = 64 * 1024
+        tables.mutations.add_row(0, node=0, derived_state="b" * big_alloc)
+        self.verify_block_size(tables)
+
+    def test_keep_mutations_block_size_metadata(self):
+        tables = tskit.TableCollection()
+        big_alloc = 64 * 1024
+        tables.sites.add_row(0, "a", metadata=b"x" * big_alloc)
+        self.verify_block_size(tables)
+        tables.mutations.add_row(0, node=0, derived_state="b" * 2 * big_alloc)
+        self.verify_block_size(tables)
 
 
 class TestDemographyDebugger(unittest.TestCase):

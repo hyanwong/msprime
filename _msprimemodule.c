@@ -87,9 +87,9 @@ handle_tskit_library_error(int err)
 }
 
 static void
-handle_input_error(int err)
+handle_input_error(const char *section, int err)
 {
-    PyErr_SetString(MsprimeInputError, msp_strerror(err));
+    PyErr_Format(MsprimeInputError, "Input error in %s: %s", section, msp_strerror(err));
 }
 
 /*
@@ -2361,12 +2361,113 @@ Simulator_parse_population_configuration(Simulator *self, PyObject *py_pop_confi
         err = msp_set_population_configuration(self->sim, j,
                 initial_size, growth_rate);
         if (err != 0) {
-            handle_input_error(err);
+            handle_input_error("population configuration", err);
             goto out;
         }
     }
     ret = 0;
 out:
+    return ret;
+}
+
+static int
+Simulator_parse_pedigree(Simulator *self, PyObject *pedigree_dict)
+{
+    int ret = -1;
+    size_t num_inds = 0;
+    int ploidy;
+    npy_intp *shape;
+    int *inds = NULL;
+    int *parents = NULL;
+    double *times = NULL;
+    uint32_t *is_sample = NULL;
+    PyObject *inds_input = NULL;
+    PyArrayObject *inds_array = NULL;
+    PyObject *parents_input = NULL;
+    PyArrayObject *parents_array = NULL;
+    PyObject *times_input = NULL;
+    PyArrayObject *times_array = NULL;
+    PyObject *is_sample_input = NULL;
+    PyArrayObject *is_sample_array = NULL;
+
+    // Steps to loading arrays from dict (tentative) - taken from
+    //    parse_node_table_dict()
+    // 1) For each array, declare PyObject *arrayname_input,
+    //    PyArrayObject *arrayname_array, and dtype* arrayname_data
+    // 2) Using get_table_dict_value(), load array from dict into
+    //    *arrayname_input
+    // 3) Using table_read_column_array(), load arrayname_input
+    //    into arrayname_array
+    // 4) Set arrayname_data = PyArray_DATA(arrayname_array)
+    // 5) In out: include Py_XDECREF(arrayname_array) for all arrays
+
+    inds_input = get_table_dict_value(pedigree_dict, "individual", true);
+    if (inds_input == NULL) {
+        goto out;
+    }
+    parents_input = get_table_dict_value(pedigree_dict, "parents", true);
+    if (parents_input == NULL) {
+        goto out;
+    }
+    times_input = get_table_dict_value(pedigree_dict, "time", true);
+    if (times_input == NULL) {
+        goto out;
+    }
+    is_sample_input = get_table_dict_value(pedigree_dict, "is_sample", true);
+    if (is_sample_input == NULL) {
+        goto out;
+    }
+
+    /* Create the arrays */
+    parents_array = (PyArrayObject *) PyArray_FROMANY(parents_input, NPY_INT32,
+            2, 2, NPY_ARRAY_IN_ARRAY);
+    if (parents_array == NULL) {
+        goto out;
+    }
+
+    shape = PyArray_DIMS(parents_array);
+    parents = PyArray_DATA(parents_array);
+    num_inds = (size_t) shape[0];
+    /* If NDIMS == 1 this is out of range - in that case set ploidy = 1 (see above) */
+    ploidy = (int) shape[1];
+
+    inds_array = table_read_column_array(inds_input, NPY_INT32, &num_inds, true);
+    if (inds_array == NULL) {
+        goto out;
+    }
+    inds = PyArray_DATA(inds_array);
+
+    times_array = table_read_column_array(times_input, NPY_FLOAT64, &num_inds, true);
+    if (times_array == NULL) {
+        goto out;
+    }
+    times = PyArray_DATA(times_array);
+
+    is_sample_array = table_read_column_array(is_sample_input, NPY_UINT32, &num_inds,
+            true);
+    if (is_sample_array == NULL) {
+        goto out;
+    }
+    is_sample = PyArray_DATA(is_sample_array);
+
+    ret = msp_alloc_pedigree(self->sim, num_inds, ploidy);
+    if (ret != 0) {
+        handle_input_error("pedigree", ret);
+        goto out;
+    }
+    ret = msp_set_pedigree(self->sim, num_inds, inds, parents, times, is_sample);
+    if (ret != 0) {
+        /* TODO: Is this right to set here? */
+        handle_input_error("pedigree", ret);
+        goto out;
+    }
+    ret = 0;
+out:
+    Py_XDECREF(inds_array);
+    Py_XDECREF(parents_array);
+    Py_XDECREF(times_array);
+    Py_XDECREF(is_sample_array);
+
     return ret;
 }
 
@@ -2409,7 +2510,7 @@ Simulator_parse_migration_matrix(Simulator *self, PyObject *py_migration_matrix)
     }
     err = msp_set_migration_matrix(self->sim, size, migration_matrix);
     if (err != 0) {
-        handle_input_error(err);
+        handle_input_error("migration matrix", err);
         goto out;
     }
     ret = 0;
@@ -2462,7 +2563,7 @@ Simulator_parse_sweep_genic_selection_model(Simulator *self, PyObject *py_model,
     err = msp_set_simulation_model_sweep_genic_selection(self->sim, reference_size,
             position, start_frequency, end_frequency, alpha, dt);
     if (err != 0) {
-        handle_input_error(err);
+        handle_input_error("sweep genic selection", err);
         goto out;
     }
     ret = 0;
@@ -2480,11 +2581,13 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     PyObject *smc_s = NULL;
     PyObject *smc_prime_s = NULL;
     PyObject *dtwf_s = NULL;
+    PyObject *wf_ped_s = NULL;
     PyObject *dirac_s = NULL;
     PyObject *beta_s = NULL;
     PyObject *sweep_genic_selection_s = NULL;
     PyObject *value;
     int is_hudson, is_dtwf, is_smc, is_smc_prime, is_dirac, is_beta, is_sweep_genic_selection;
+    int is_wf_ped;
     double reference_size, psi, c, alpha, truncation_point;
 
     if (Simulator_check_sim(self) != 0) {
@@ -2496,6 +2599,10 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     }
     dtwf_s = Py_BuildValue("s", "dtwf");
     if (dtwf_s == NULL) {
+        goto out;
+    }
+    wf_ped_s = Py_BuildValue("s", "wf_ped");
+    if (wf_ped_s == NULL) {
         goto out;
     }
     smc_s = Py_BuildValue("s", "smc");
@@ -2550,6 +2657,13 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     }
     if (is_dtwf) {
         err = msp_set_simulation_model_dtwf(self->sim, reference_size);
+    }
+    is_wf_ped = PyObject_RichCompareBool(py_name, wf_ped_s, Py_EQ);
+    if (is_wf_ped == -1) {
+        goto out;
+    }
+    if (is_wf_ped) {
+        err = msp_set_simulation_model_wf_ped(self->sim, reference_size);
     }
 
     is_smc = PyObject_RichCompareBool(py_name, smc_s, Py_EQ);
@@ -2626,18 +2740,19 @@ Simulator_parse_simulation_model(Simulator *self, PyObject *py_model)
     }
 
     if (! (is_hudson || is_dtwf || is_smc || is_smc_prime || is_dirac
-                || is_beta || is_sweep_genic_selection)) {
+                || is_beta || is_sweep_genic_selection || is_wf_ped)) {
         PyErr_SetString(PyExc_ValueError, "Unknown simulation model");
         goto out;
     }
     if (err != 0) {
-        handle_input_error(err);
+        handle_input_error("simulation model", err);
         goto out;
     }
     ret = 0;
 out:
     Py_XDECREF(hudson_s);
     Py_XDECREF(dtwf_s);
+    Py_XDECREF(wf_ped_s);
     Py_XDECREF(smc_s);
     Py_XDECREF(smc_prime_s);
     Py_XDECREF(beta_s);
@@ -2846,7 +2961,9 @@ Simulator_parse_demographic_events(Simulator *self, PyObject *py_events)
             goto out;
         }
         if (err != 0) {
-            handle_input_error(err);
+            PyErr_Format(MsprimeInputError,
+                    "Input error in demographic_events[%d]: %s", j,
+                    msp_strerror(err));
             goto out;
         }
     }
@@ -2859,6 +2976,7 @@ out:
     Py_XDECREF(instantaneous_bottleneck_s);
     Py_XDECREF(initial_size_s);
     Py_XDECREF(growth_rate_s);
+    Py_XDECREF(census_event_s);
     return ret;
 }
 
@@ -2882,13 +3000,15 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     int ret = -1;
     int sim_ret;
     static char *kwlist[] = {"samples", "recombination_map", "random_generator",
-        "tables", "population_configuration", "migration_matrix", "demographic_events",
-        "model", "avl_node_block_size", "segment_block_size",
+        "tables", "population_configuration", "pedigree", "migration_matrix",
+        "demographic_events", "model", "avl_node_block_size", "segment_block_size",
         "node_mapping_block_size", "store_migrations", "start_time",
-        "store_full_arg", "num_labels", NULL};
+        "store_full_arg", "num_labels", "gene_conversion_rate",
+        "gene_conversion_track_length", NULL};
     PyObject *py_samples = NULL;
     PyObject *migration_matrix = NULL;
     PyObject *population_configuration = NULL;
+    PyObject *pedigree = Py_None;
     PyObject *demographic_events = NULL;
     PyObject *py_model = NULL;
     LightweightTableCollection *tables = NULL;
@@ -2905,25 +3025,31 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     int store_migrations = 0;
     int store_full_arg = 0;
     double start_time = -1;
+    double gene_conversion_rate = 0;
+    double gene_conversion_track_length = 1.0;
 
     self->sim = NULL;
     self->random_generator = NULL;
     self->recombination_map = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!|O!O!O!O!nnnidin", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!|O!OO!O!O!nnnidindd", kwlist,
             &PyList_Type, &py_samples,
             &RecombinationMapType, &recombination_map,
             &RandomGeneratorType, &random_generator,
             &LightweightTableCollectionType, &tables,
+            /* optional */
             &PyList_Type, &population_configuration,
+            &pedigree,
             &PyList_Type, &migration_matrix,
             &PyList_Type, &demographic_events,
             &PyDict_Type, &py_model,
             &avl_node_block_size, &segment_block_size,
             &node_mapping_block_size, &store_migrations, &start_time,
-            &store_full_arg, &num_labels)) {
+            &store_full_arg, &num_labels,
+            &gene_conversion_rate, &gene_conversion_track_length)) {
         goto out;
     }
     self->random_generator = random_generator;
+    /* printf("Random seed: %lu\n", random_generator->seed); */
     self->recombination_map = recombination_map;
     self->tables = tables;
     Py_INCREF(self->random_generator);
@@ -2948,7 +3074,7 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
             recombination_map->recomb_map, tables->tables,
             self->random_generator->rng);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("simulator alloc", sim_ret);
         goto out;
     }
     if (py_model != NULL) {
@@ -2959,31 +3085,37 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     if (start_time >= 0) {
         sim_ret = msp_set_start_time(self->sim, start_time);
         if (sim_ret != 0) {
-            handle_input_error(sim_ret);
+            handle_input_error("start time", sim_ret);
             goto out;
         }
     }
     sim_ret = msp_set_store_migrations(self->sim, (bool) store_migrations);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("store migrations", sim_ret);
         goto out;
     }
     sim_ret = msp_set_avl_node_block_size(self->sim,
             (size_t) avl_node_block_size);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("avl_node_block_size", sim_ret);
         goto out;
     }
     sim_ret = msp_set_segment_block_size(self->sim,
             (size_t) segment_block_size);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("segment_block_size", sim_ret);
         goto out;
     }
     sim_ret = msp_set_node_mapping_block_size(self->sim,
             (size_t) node_mapping_block_size);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("node_mapping_block_size", sim_ret);
+        goto out;
+    }
+    sim_ret = msp_set_gene_conversion_rate(self->sim, gene_conversion_rate,
+            gene_conversion_track_length);
+    if (sim_ret != 0) {
+        handle_input_error("set_gene_conversion_rate", sim_ret);
         goto out;
     }
 
@@ -2996,10 +3128,25 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
     }
     sim_ret = msp_set_dimensions(self->sim, (size_t) num_populations, (size_t) num_labels);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("set_dimensions", sim_ret);
         goto out;
     }
-
+    if (pedigree != Py_None) {
+        if (!PyDict_Check(pedigree)) {
+            PyErr_SetString(PyExc_TypeError, "Pedigree must be a dictionary");
+            goto out;
+        }
+        if (self->sim->model.type != MSP_MODEL_WF_PED) {
+            PyErr_SetString(PyExc_ValueError,
+                "A pedigree can only be supplied under the "
+                "`msprime.WrightFisherPedigree` simulation model");
+            goto out;
+        }
+        sim_ret = Simulator_parse_pedigree(self, pedigree);
+        if (sim_ret != 0) {
+            goto out;
+        }
+    }
     if (population_configuration != NULL) {
         if (Simulator_parse_population_configuration(self, population_configuration) != 0) {
             goto out;
@@ -3029,7 +3176,7 @@ Simulator_init(Simulator *self, PyObject *args, PyObject *kwds)
 
     sim_ret = msp_initialise(self->sim);
     if (sim_ret != 0) {
-        handle_input_error(sim_ret);
+        handle_input_error("initialise", sim_ret);
         goto out;
     }
     ret = 0;
@@ -3307,6 +3454,19 @@ Simulator_get_num_recombination_events(Simulator  *self)
     }
     ret = Py_BuildValue("n",
         (Py_ssize_t) msp_get_num_recombination_events(self->sim));
+out:
+    return ret;
+}
+
+static PyObject *
+Simulator_get_num_gene_conversion_events(Simulator  *self)
+{
+    PyObject *ret = NULL;
+    if (Simulator_check_sim(self) != 0) {
+        goto out;
+    }
+    ret = Py_BuildValue("n",
+        (Py_ssize_t) msp_get_num_gene_conversion_events(self->sim));
 out:
     return ret;
 }
@@ -3966,6 +4126,9 @@ static PyMethodDef Simulator_methods[] = {
     {"get_num_recombination_events",
             (PyCFunction) Simulator_get_num_recombination_events, METH_NOARGS,
             "Returns the number of recombination_events" },
+    {"get_num_gene_conversion_events",
+            (PyCFunction) Simulator_get_num_gene_conversion_events, METH_NOARGS,
+            "Returns the number of gene_conversion_events" },
     {"get_num_migration_events",
             (PyCFunction) Simulator_get_num_migration_events, METH_NOARGS,
             "Returns the number of migration events" },

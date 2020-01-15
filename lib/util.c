@@ -153,10 +153,19 @@ msp_strerror_internal(int err)
             ret = "Population size has decreased to zero individuals.";
             break;
         case MSP_ERR_DTWF_UNSUPPORTED_BOTTLENECK:
-            ret = "Bottleneck events are not supported in DTWF. They can "
-                "be implemented as population size changes.";
+            ret = "Bottleneck events are not supported in the DTWF model. "
+                "They can be implemented as population size changes.";
             break;
-
+        case MSP_ERR_BAD_PEDIGREE_NUM_SAMPLES:
+            ret = "The number of haploid lineages denoted by sample_size must "
+                "be divisible by ploidy (default 2)";
+            break;
+        case MSP_ERR_BAD_PEDIGREE_ID:
+            ret = "Individual IDs in pedigrees must be strictly > 0.";
+            break;
+        case MSP_ERR_BAD_PROPORTION:
+            ret = "Proportion values must have 0 <= x <= 1";
+            break;
         default:
             ret = "Error occurred generating error string. Please file a bug "
                 "report!";
@@ -199,4 +208,31 @@ __msp_safe_free(void **ptr) {
             *ptr = NULL;
         }
     }
+}
+
+/* Find the `index` of the interval within `values` the `query` fits, such that
+ * values[index-1] < query <= values[index]
+ * Will find the leftmost such index
+ * Assumes `values` are sorted
+ */
+size_t
+msp_binary_interval_search(double query, double *values, size_t n_values)
+{
+    if (n_values == 0) {
+        return 0;
+    }
+    size_t l = 0;
+    size_t r = n_values - 1;
+    size_t m;
+
+    while (l < r) {
+        m = (l + r) / 2UL;
+
+        if (values[m] < query) {
+            l = m + 1;
+        } else {
+            r = m;
+        }
+    }
+    return l;
 }

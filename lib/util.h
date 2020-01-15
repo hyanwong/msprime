@@ -20,6 +20,7 @@
 #define __UTIL_H__
 
 #include <stdbool.h>
+#include <math.h>
 
 #ifdef __GNUC__
     /*
@@ -73,6 +74,9 @@
 #define MSP_ERR_UNSUPPORTED_OPERATION                               -36
 #define MSP_ERR_DTWF_ZERO_POPULATION_SIZE                           -38
 #define MSP_ERR_DTWF_UNSUPPORTED_BOTTLENECK                         -39
+#define MSP_ERR_BAD_PROPORTION                                      -40
+#define MSP_ERR_BAD_PEDIGREE_NUM_SAMPLES                            -41
+#define MSP_ERR_BAD_PEDIGREE_ID                                     -42
 
 /* This bit is 0 for any errors originating from tskit */
 #define MSP_TSK_ERR_BIT 13
@@ -83,5 +87,7 @@ const char * msp_strerror(int err);
 void __msp_safe_free(void **ptr);
 
 #define msp_safe_free(pointer) __msp_safe_free((void **) &(pointer))
+
+size_t msp_binary_interval_search(double query, double *values, size_t n_values);
 
 #endif /*__UTIL_H__*/
