@@ -236,6 +236,14 @@ class Population:
             raise ValueError("A population name must be a valid Python identifier")
 
 
+class PopulationIdPresetError(ValueError):
+    """
+    Error raised when a population ID is alreadt set when making a demography object
+    """
+
+    pass
+
+
 @dataclasses.dataclass
 class Demography(collections.abc.Mapping):
     """
@@ -289,7 +297,7 @@ class Demography(collections.abc.Mapping):
         # Assign the IDs and default names, if needed.
         for j, population in enumerate(self.populations):
             if population.id is not None:
-                raise ValueError(
+                raise PopulationIdPresetError(
                     "Population ID should not be set before using to create "
                     "a Demography"
                 )
